@@ -14,7 +14,12 @@ by Nvidium with the pack's shaders; F3 reports `pack shaders (36 B/vertex)` for 
 shows the pack's reflections. About 150-170 fps. Open question: the translucent pass took about
 3.5 ms against 0.2 ms for opaque terrain. Likely mostly the pack's water fragment shader
 (reflections), which Sodium would pay too; not yet compared against plain Sodium.
-**M4 (shadows) implemented, not yet tested in game**: compiles, and 18 unit tests pass.
+**M4 tested in game** with Complementary Reimagined r5.9.3 (HIGH profile, colored lighting on):
+terrain, water, shadow terrain and shadow water all run through the pack's programs (F3 shows
+`pack shaders` for all four), and Iris reports terrain in the shadow map (`Shadows: C: 2250/22104`).
+113 fps at 2560x1009. Getting Complementary to build needed two transformer fixes: scope-aware
+renaming of outputs (its functions reuse names like `normal` for parameters) and keeping the
+initializers of arrays sized only by them (`vec3[] specialTintColor = vec3[](...)`).
 
 ### Milestone log
 
