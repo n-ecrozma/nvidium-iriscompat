@@ -117,6 +117,65 @@ class MeshShaderTransformerTest {
     }
 
     @Test
+    void parametersAndLocalsShadowingOutputsAreLeftAlone() {
+        // Complementary Reimagined: outputs named normal/lmCoord, and library functions with parameters and locals
+        // of the same names. Renaming those references broke compilation ("undefined variable _nv_vs_normal").
+        String src = """
+                #version 330 core
+                out vec3 normal;
+                out vec2 lmCoord;
+                struct Hit { vec3 normal; };
+                vec3 useParam(vec3 normal) { return normal * 2.0; }
+                float useLocal() { vec3 normal = vec3(1.0); return normal.x; }
+                float useLoop() { float s = 0.0; for (int lmCoord = 0; lmCoord < 3; lmCoord++) { s += float(lmCoord); } return s; }
+                float before() { float x = normal.x; vec3 normal = vec3(2.0); return x + normal.y; }
+                float nested() { float r = 0.0; if (r < 1.0) { vec2 lmCoord = vec2(3.0); r = lmCoord.x; } return r + lmCoord.y; }
+                float member(Hit h) { return h.normal.x; }
+                void main() {
+                    normal = useParam(vec3(1.0));
+                    lmCoord = vec2(useLocal(), useLoop() + before() + nested());
+                    gl_Position = vec4(normal, 1.0);
+                }
+                """;
+        String body = MeshShaderTransformer.transform(src).body();
+        System.out.println("---- shadowing ----\n" + body);
+        assertTrue(has(body, "useParam\\s*\\(\\s*vec3\\s+normal\\s*\\)"), "parameter declaration must keep its name");
+        assertTrue(has(body, "return\\s+normal\\s*\\*\\s*2\\.0"), "parameter reference must not be renamed");
+        assertTrue(has(body, "vec3\\s+normal\\s*=\\s*vec3\\(1\\.0f?\\)\\s*;\\s*return\\s+normal\\.x"), "local reference must not be renamed");
+        assertTrue(has(body, "for\\s*\\(\\s*int\\s+lmCoord\\s*=\\s*0\\s*;\\s*lmCoord\\s*<\\s*3"), "loop variable must not be renamed");
+        assertTrue(has(body, "s\\s*\\+=\\s*float\\(lmCoord\\)"), "loop variable reference must not be renamed");
+        assertTrue(has(body, "float\\s+x\\s*=\\s*_nv_vs_normal\\.x"), "reference before the local's declaration reads the output");
+        assertTrue(has(body, "return\\s+x\\s*\\+\\s*normal\\.y"), "reference after the local's declaration reads the local");
+        assertTrue(has(body, "r\\s*=\\s*lmCoord\\.x"), "inner block local must not be renamed");
+        assertTrue(has(body, "return\\s+r\\s*\\+\\s*_nv_vs_lmCoord\\.y"), "outside the inner block the output is used");
+        assertTrue(has(body, "h\\.normal\\.x"), "struct member access must not be renamed");
+        assertTrue(has(body, "_nv_vs_normal\\s*=\\s*useParam"));
+        assertTrue(has(body, "vec4\\(_nv_vs_normal,"));
+    }
+
+    @Test
+    void arraysSizedByTheirInitializerKeepIt() {
+        // Complementary's blocklightColors.glsl: "vec3[] specialTintColor = vec3[](...)" at global scope. Moving the
+        // initializer left an unsized global array ("no size for unsized array" when linking).
+        String src = """
+                #version 330 core
+                vec3[] specialTintColor = vec3[](vec3(1.0), vec3(2.0));
+                float table[] = float[](1.0, 2.0, 3.0);
+                vec2 sized[2] = vec2[](vec2(0.0), vec2(1.0));
+                in uint mc_Entity;
+                float entity = float(mc_Entity);
+                void main() { gl_Position = vec4(specialTintColor[1], table[2] + sized[1].y + entity); }
+                """;
+        PackVertexStage result = MeshShaderTransformer.transform(src);
+        System.out.println("---- unsized ----\n" + result.body() + "\n" + result.globalInitializers());
+        assertTrue(has(result.body(), "specialTintColor\\s*=\\s*vec3\\s*\\[\\s*]\\s*\\("), "unsized type array keeps its initializer");
+        assertTrue(has(result.body(), "table\\s*\\[\\s*]\\s*=\\s*float\\s*\\[\\s*]\\s*\\("), "unsized declarator array keeps its initializer");
+        assertTrue(result.globalInitializers().stream().anyMatch(s -> s.startsWith("sized =")), "sized arrays are still moved");
+        assertTrue(result.globalInitializers().stream().anyMatch(s -> s.startsWith("entity =")), "initializers reading inputs are moved");
+        assertFalse(result.globalInitializers().stream().anyMatch(s -> s.startsWith("specialTintColor") || s.startsWith("table")));
+    }
+
+    @Test
     void rejectsShaderWithoutMain() {
         assertThrows(RuntimeException.class, () -> MeshShaderTransformer.transform("#version 330 core\nvoid notMain() {}\n"));
     }

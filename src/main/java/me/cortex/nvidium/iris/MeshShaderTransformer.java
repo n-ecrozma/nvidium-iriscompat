@@ -1,5 +1,6 @@
 package me.cortex.nvidium.iris;
 
+import io.github.douira.glsl_transformer.ast.node.Identifier;
 import io.github.douira.glsl_transformer.ast.node.Profile;
 import io.github.douira.glsl_transformer.ast.node.TranslationUnit;
 import io.github.douira.glsl_transformer.ast.node.Version;
@@ -7,12 +8,19 @@ import io.github.douira.glsl_transformer.ast.node.VersionStatement;
 import io.github.douira.glsl_transformer.ast.node.abstract_node.ASTNode;
 import io.github.douira.glsl_transformer.ast.node.declaration.Declaration;
 import io.github.douira.glsl_transformer.ast.node.declaration.DeclarationMember;
+import io.github.douira.glsl_transformer.ast.node.declaration.FunctionParameter;
 import io.github.douira.glsl_transformer.ast.node.declaration.InterfaceBlockDeclaration;
 import io.github.douira.glsl_transformer.ast.node.declaration.TypeAndInitDeclaration;
 import io.github.douira.glsl_transformer.ast.node.declaration.VariableDeclaration;
 import io.github.douira.glsl_transformer.ast.node.external_declaration.DeclarationExternalDeclaration;
 import io.github.douira.glsl_transformer.ast.node.external_declaration.ExtensionDirective;
 import io.github.douira.glsl_transformer.ast.node.external_declaration.ExternalDeclaration;
+import io.github.douira.glsl_transformer.ast.node.external_declaration.FunctionDefinition;
+import io.github.douira.glsl_transformer.ast.node.expression.ReferenceExpression;
+import io.github.douira.glsl_transformer.ast.node.statement.CompoundStatement;
+import io.github.douira.glsl_transformer.ast.node.statement.Statement;
+import io.github.douira.glsl_transformer.ast.node.statement.loop.ForLoopStatement;
+import io.github.douira.glsl_transformer.ast.node.statement.terminal.DeclarationStatement;
 import io.github.douira.glsl_transformer.ast.node.type.initializer.ExpressionInitializer;
 import io.github.douira.glsl_transformer.ast.node.type.qualifier.StorageQualifier;
 import io.github.douira.glsl_transformer.ast.node.type.qualifier.StorageQualifier.StorageType;
@@ -59,6 +67,7 @@ public final class MeshShaderTransformer {
 
     private static final Pattern VERSION_PATTERN = Pattern.compile("#version\\s+(\\d+)");
     private static final Pattern VERSION_LINE = Pattern.compile("(?m)^\\s*#version[^\\n]*\\n?");
+    private static final Pattern UNSIZED_ARRAY = Pattern.compile("\\[\\s*]");
 
     /** Uniform blocks that hold per-draw values which Nvidium has to vary per section, so they become globals. */
     private static final Set<String> BLOCKS_TO_GLOBALS = Set.of("iris_SodiumPushConstants");
@@ -139,7 +148,7 @@ public final class MeshShaderTransformer {
             try {
                 collectExtensions();
                 rewriteDeclarations();
-                referenceRenames.forEach((from, to) -> root.replaceReferenceExpressions(parser, from, to));
+                referenceRenames.forEach(this::renameGlobalReferences);
                 redirectBuiltins();
                 if (!root.rename("main", PACK_MAIN)) {
                     throw new IllegalArgumentException("Vertex shader has no main function");
@@ -327,13 +336,77 @@ public final class MeshShaderTransformer {
                 if (storageType(declaration.getType().getTypeQualifier()) != null) {
                     continue; // const, uniform, ... keep their initializers
                 }
+                String type = print(declaration.getType().getTypeSpecifier());
                 for (DeclarationMember member : declaration.getMembers()) {
+                    // An array sized only by its initializer (e.g. "vec3[] t = vec3[](...)") would lose its size.
+                    // These are constant tables in practice, so evaluating them once per invocation is fine.
+                    if (UNSIZED_ARRAY.matcher(type + print(member.getArraySpecifier())).find()) {
+                        continue;
+                    }
                     if (member.getInitializer() instanceof ExpressionInitializer initializer) {
                         globalInitializers.add(member.getName().getName() + " = " + print(initializer.getExpression()) + ";");
                         member.setInitializer(null);
                     }
                 }
             }
+        }
+
+        /**
+         * Points references to a global (an output being redirected) at its replacement, leaving references to
+         * function parameters, locals and loop variables that shadow it alone. Packs often reuse output names such
+         * as {@code normal} for parameters and locals.
+         */
+        private void renameGlobalReferences(String name, String replacement) {
+            for (Identifier identifier : List.copyOf(root.identifierIndex.get(name))) {
+                if (identifier.getParent() instanceof ReferenceExpression reference && !isShadowed(reference, name)) {
+                    identifier.setName(replacement);
+                }
+            }
+        }
+
+        /** Whether a declaration in an enclosing scope hides the global {@code name} at this node (GLSL scoping). */
+        private static boolean isShadowed(ASTNode node, String name) {
+            ASTNode child = node;
+            ASTNode parent = node.getParent();
+            while (parent != null) {
+                if (parent instanceof CompoundStatement block) {
+                    // Only declarations before the statement containing the reference are in scope; a variable's
+                    // scope starts after its declarator, so "vec3 normal = normal;" still reads the global
+                    for (Statement statement : block.getStatements()) {
+                        if (statement == child) {
+                            break;
+                        }
+                        if (statement instanceof DeclarationStatement declaration && declares(declaration.getDeclaration(), name)) {
+                            return true;
+                        }
+                    }
+                } else if (parent instanceof ForLoopStatement loop) {
+                    if (loop.getInitDeclaration() != null && loop.getInitDeclaration() != child && declares(loop.getInitDeclaration(), name)) {
+                        return true;
+                    }
+                } else if (parent instanceof FunctionDefinition function) {
+                    for (FunctionParameter parameter : function.getFunctionPrototype().getParameters()) {
+                        if (parameter.getName() != null && parameter.getName().getName().equals(name)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                child = parent;
+                parent = parent.getParent();
+            }
+            return false;
+        }
+
+        private static boolean declares(Declaration declaration, String name) {
+            if (declaration instanceof TypeAndInitDeclaration typeAndInit) {
+                for (DeclarationMember member : typeAndInit.getMembers()) {
+                    if (member.getName().getName().equals(name)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private void replace(DeclarationExternalDeclaration external, List<String> declarations) {
