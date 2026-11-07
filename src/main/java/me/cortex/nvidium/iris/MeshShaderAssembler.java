@@ -165,7 +165,8 @@ public final class MeshShaderAssembler {
             if (in == null) {
                 throw new IllegalStateException("Missing " + TEMPLATE_PATH);
             }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Git on Windows may check the template out with CRLF line endings; keep the output consistent
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

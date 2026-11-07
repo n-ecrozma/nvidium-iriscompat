@@ -65,8 +65,18 @@ class MeshShaderAssemblerTest {
         assertTrue(mesh.contains("flat out vec2 lmcoord[];"));
         assertTrue(mesh.contains("texcoord[_nv_vid] = _nv_vs_texcoord;"));
         assertTrue(mesh.contains("iris_Entity = vec2("));
-        // Initializers run after the inputs are loaded
-        assertTrue(mesh.indexOf("_nv_load_vertex();\n") < mesh.indexOf("_nv_init_globals();\n    _nv_pack_main();"));
+        // Initializers run after the inputs are loaded, and before the pack's main
+        int load = mesh.indexOf("_nv_load_vertex();");
+        int init = mesh.indexOf("_nv_init_globals();");
+        int packMain = mesh.indexOf("_nv_pack_main();");
+        assertTrue(load > 0 && init > 0 && packMain > 0, "calls missing from _nv_run_vertex");
+        assertTrue(load < init && init < packMain, "wrong call order in _nv_run_vertex");
+    }
+
+    @Test
+    void usesUnixLineEndings() {
+        // The template may be checked out with CRLF (Git on Windows); the output must not depend on that
+        assertFalse(mesh.contains("\r"), "assembled shader contains CR characters");
     }
 
     @Test
