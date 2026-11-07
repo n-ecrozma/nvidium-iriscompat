@@ -37,6 +37,7 @@ void main() {
     chunk.y >>= 32-9;
     chunk -= chunkPosition.xyz;
     transformationId = unpackRegionTransformId(regionData[sectionId>>8]);
+    sectionFadeStart = sectionData[sectionId].fadeStart;
     chunk -= unpackOriginOffsetId(transformationId);
 
     origin = vec3(chunk<<4);

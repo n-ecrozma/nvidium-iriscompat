@@ -104,6 +104,13 @@ class MeshShaderTransformerTest {
     }
 
     @Test
+    void chunkFadeLookupUsesSectionTime() {
+        // Iris reads when the section appeared from u_SectionTimeInfo; Nvidium supplies it per section instead
+        assertFalse(has(stage.body(), "texelFetch\\s*\\(\\s*u_SectionTimeInfo"), "the lookup must be replaced");
+        assertTrue(has(stage.body(), "int\\s+chunkFade\\s*=\\s*ivec4\\(_nv_sectionTime\\)\\.r"), stage.body());
+    }
+
+    @Test
     void anonymousOutputBlock() {
         String src = """
                 #version 330 core

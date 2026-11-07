@@ -36,6 +36,7 @@ taskNV in Task {
     uint8_t jiggle;
     #endif
     int translucencyIndex;
+    int sectionFadeStart;
 };
 
 #ifndef USE_NV_FRAGMENT_SHADER_BARYCENTRIC

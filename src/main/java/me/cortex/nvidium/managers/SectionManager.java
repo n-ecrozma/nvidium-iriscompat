@@ -17,6 +17,7 @@ import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkSortOutput;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.DefaultTerrainRenderPasses;
 import net.caffeinemc.mods.sodium.client.util.NativeBuffer;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.SectionPos;
 import org.joml.Vector3i;
 import org.joml.Vector4i;
@@ -28,6 +29,10 @@ import static me.cortex.nvidium.Nvidium.LOGGER;
 
 public class SectionManager {
     public static final int SECTION_SIZE = 32 + 16;
+    /** Offset of Section.fadeStart in a section's metadata (see occlusion/scene.glsl). */
+    private static final int FADE_START_OFFSET = 40;
+    /** Start of Nvidium's chunk fade clock; times are milliseconds since then. */
+    private final long chunkFadeEpoch = System.currentTimeMillis();
 
     //Sections should be grouped and batched into sizes of the count of sections in a region
     private final RegionManager regionManager;
@@ -198,6 +203,7 @@ public class SectionManager {
 
 
         //Get the section id or allocate a new instance for it
+        boolean newSection = !this.section2id.containsKey(sectionKey);
         int sectionIdx = this.section2id.computeIfAbsent(
                 sectionKey,
                 key -> this.regionManager.allocateSection(SectionPos.x(key), SectionPos.y(key), SectionPos.z(key))
@@ -205,6 +211,7 @@ public class SectionManager {
 
 
         long metadata = regionManager.setSectionData(sectionIdx);
+        final long sectionMetadata = metadata;
         boolean hideSectionBitSet = this.hiddenSectionKeys.contains(sectionKey);
         Vector3i min  = output.min();
         Vector3i size = output.size();
@@ -228,6 +235,13 @@ public class SectionManager {
         // Put translucent quad count separately as int to prevent overflow, will do trick for now
         MemoryUtil.memPutInt(metadata, output.offsets()[7]);
         metadata += 4;
+
+        // Section.fadeStart (byte 40): when the section first appeared, for shader packs' mc_chunkFade. Only set for
+        // new sections, so rebuilds (e.g. placing a block) don't fade in again. It moves with the section when slots
+        // are compacted, since the whole metadata block is copied.
+        if (newSection) {
+            MemoryUtil.memPutInt(sectionMetadata + FADE_START_OFFSET, chunkFadeStart());
+        }
 
         // Reinject or free index data
         if (Nvidium.config.translucency_sorting_level == TranslucencySortingLevel.SODIUM) {
@@ -278,6 +292,16 @@ public class SectionManager {
             long metadata = this.regionManager.setSectionData(sectionId);
             MemoryUtil.memPutInt(metadata + 4, (MemoryUtil.memGetInt(metadata + 4)&~(1<<17))| (hide?1:0)<<17);
         }
+    }
+
+    /** Nvidium's chunk fade clock: milliseconds since this section manager was created. */
+    public int chunkFadeClock() {
+        return (int) (System.currentTimeMillis() - this.chunkFadeEpoch);
+    }
+
+    /** Fade start for a section appearing now, or -1 (no fade-in) when Minecraft's chunk fade-in time is 0. */
+    private int chunkFadeStart() {
+        return Minecraft.getInstance().options.chunkSectionFadeInTime().get() > 0 ? chunkFadeClock() : -1;
     }
 
     /**

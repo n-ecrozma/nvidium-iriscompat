@@ -16,16 +16,19 @@ taskNV in Task {
     vec4 originAndBaseData;
     uint quadCount;
     int translucencyIndex;
+    int sectionFadeStart;
 } _nv_task;
 
 layout(std140, binding = ${SCENE_BINDING}) uniform _NvIrisScene {
     vec4 _nv_subchunkOffset;
     // Terrain vertices, ${VERTEX_WORDS} words each. Sodium's sorted quad order lives in the same buffer.
     readonly restrict uint *_nv_terrainData;
+    int _nv_currentTime;
 };
 
 uint _nv_vid;
 uint _nv_vertexBase;
+int _nv_sectionTime;
 
 uint _nv_word(uint index) {
     return _nv_terrainData[_nv_vertexBase + index];
@@ -33,6 +36,10 @@ uint _nv_word(uint index) {
 
 vec3 _nv_section_origin() {
     return _nv_task.originAndBaseData.xyz;
+}
+
+int _nv_section_fade_start() {
+    return _nv_task.sectionFadeStart;
 }
 
 // ---- shader pack vertex stage ----

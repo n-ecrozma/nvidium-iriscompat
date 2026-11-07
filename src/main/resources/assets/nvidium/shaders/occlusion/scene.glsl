@@ -31,6 +31,8 @@ struct Section {
     ivec4 renderRanges;
     int   tranlucentQuadCount;
     int   translucencyDataIdx;
+    //When the section first appeared, in Nvidium's chunk fade clock (ms), or -1 for no fade-in; see SectionManager
+    int   fadeStart;
 };
 
 struct Region {

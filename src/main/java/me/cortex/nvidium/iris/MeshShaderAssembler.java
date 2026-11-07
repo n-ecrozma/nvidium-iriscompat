@@ -150,8 +150,9 @@ public final class MeshShaderAssembler {
             lines.add("iris_RegionOffset = _nv_section_origin() + _nv_subchunkOffset.xyz;");
         }
         if (stage.globals().contains("iris_CurrentTime")) {
-            lines.add("iris_CurrentTime = 0;");
+            lines.add("iris_CurrentTime = _nv_currentTime;");
         }
+        lines.add(MeshShaderTransformer.SECTION_TIME + " = _nv_section_fade_start();");
         if (stage.globals().contains("iris_RegionID")) {
             lines.add("iris_RegionID = 0u;");
         }

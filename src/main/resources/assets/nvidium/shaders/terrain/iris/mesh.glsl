@@ -23,6 +23,7 @@ taskNV in Task {
     vec3 origin;
     uint quadCount;
     uint transformationId;
+    int sectionFadeStart;
 } _nv_task;
 
 // Position of the section being drawn, relative to the chunk the camera is in
@@ -30,15 +31,23 @@ vec3 _nv_section_origin() {
     return _nv_task.origin;
 }
 
+int _nv_section_fade_start() {
+    return _nv_task.sectionFadeStart;
+}
+
 layout(std140, binding = ${SCENE_BINDING}) uniform _NvIrisScene {
     // Camera position within its chunk, negated: added to a section's origin to make it camera-relative
     vec4 _nv_subchunkOffset;
     // Terrain vertices, ${VERTEX_WORDS} words each, in the layout Iris chose for the active pack
     readonly restrict uint *_nv_terrainData;
+    // Nvidium's chunk fade clock (ms), compared with the section's fade start for mc_chunkFade
+    int _nv_currentTime;
 };
 
 uint _nv_vid;
 uint _nv_vertexBase;
+// When the current section first appeared; replaces Iris's u_SectionTimeInfo lookup (see MeshShaderTransformer)
+int _nv_sectionTime;
 
 // Which quads to draw, set by Nvidium per draw: 0 = all, 1 = solid only, 2 = cutout only. Used when the pack's
 // solid and cutout programs differ; cutout quads are marked with bit 17 of word 4 (see SodiumResultCompatibility).

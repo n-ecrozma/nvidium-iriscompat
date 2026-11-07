@@ -12,6 +12,8 @@ taskNV out Task {
     vec3 origin;
     uint quadCount;
     uint transformationId;
+    //For shader packs' mc_chunkFade (Section.fadeStart)
+    int sectionFadeStart;
 };
 
 bvec3 and(bvec3 a, bvec3 b) {

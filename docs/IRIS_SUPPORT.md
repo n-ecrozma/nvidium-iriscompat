@@ -102,12 +102,22 @@ cutout program draws both, as before. F3 shows `Shader pack solid terrain: ...`.
 Complementary Reimagined both use one program, so this path is not yet tested in game. The
 shadow pass still uses the cutout shadow program for both.
 
+**Chunk fade-in.** Packs get `mc_chunkFade` again. Each section's metadata stores when it first
+appeared (`Section.fadeStart`, the spare 4 bytes at offset 40; it moves with the section when
+slots are compacted), set only for new sections so rebuilds don't fade again, and -1 when
+Minecraft's Chunk Fade In time is 0. The task shaders pass it to the mesh shader, the transformer
+replaces Iris's `texelFetch(u_SectionTimeInfo, ...)` lookup with it, and `iris_CurrentTime` and
+`u_FadePeriodInv` come from Nvidium's clock and the fade-in option, as Sodium does.
+
+**Fix: shadow culling marked the wrong sections.** Section ids from `SectionManager` are
+positions within a region, but shaders index sections by their slot in the region's compacted
+array. The shadow visibility mask now uses `RegionManager.getSectionSlot`.
+
 ### Known limitations after M4
 
 - The **"Quads" translucency sorting** setting isn't supported with shader packs (it reorders
   vertices inside Nvidium's own translucent shader). With it selected, water falls back to
   Nvidium's shader and F3 says why; use "Sodium" (the default) or "Sections".
-- Chunk fade-in is disabled (`mc_chunkFade` is always 1).
 - Region transforms set through `NvidiumAPI` are ignored for pack-shaded terrain.
 - `gl_ClipDistance`/`gl_CullDistance` written by a pack's vertex shader are not forwarded.
 - Changing Nvidium's fog, statistics or translucency sorting option needs a shader pack reload

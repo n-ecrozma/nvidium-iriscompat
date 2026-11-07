@@ -53,7 +53,7 @@ public final class IrisTerrainPass {
 
     /** std140 size of Sodium's u_Globals block (include/globals.glsl): 2 mat4, vec4, 4 vec2, float, bool. */
     private static final int GLOBALS_SIZE = 192;
-    /** std140 size of _NvIrisScene (terrain/iris/mesh.glsl): vec4, pointer. */
+    /** std140 size of _NvIrisScene (terrain/iris/mesh.glsl): vec4, pointer, int. */
     private static final int SCENE_SIZE = 32;
 
     private final IDeviceMappedBuffer globals;
@@ -147,10 +147,16 @@ public final class IrisTerrainPass {
      *
      * @param cameraOffset   camera position within its chunk, negated (Nvidium's subchunk offset)
      * @param terrainAddress GPU address of the terrain vertex buffer
+     * @param fadeClock      Nvidium's chunk fade clock now (ms), see SectionManager#chunkFadeClock
      */
     public void upload(UploadingBufferStream stream, ChunkRenderMatrices matrices, FogParameters fog,
                        Vector3fc cameraOffset, long terrainAddress,
-                       float texelWidth, float texelHeight, float texCoordShrinkX, float texCoordShrinkY, boolean rgss) {
+                       float texelWidth, float texelHeight, float texCoordShrinkX, float texCoordShrinkY, boolean rgss,
+                       int fadeClock) {
+        // Like Sodium: mc_chunkFade = clamp((now - fadeStart) / fade-in time); sections get no fade start when it's 0
+        double fadeSeconds = Minecraft.getInstance().options.chunkSectionFadeInTime().get();
+        float fadePeriodInv = fadeSeconds > 0 ? (float) (1.0 / (fadeSeconds * 1000.0)) : 0.0f;
+
         // Same contents and order as Sodium's UniformBufferManager.GlobalUniforms
         long ptr = stream.upload(this.globals, 0, GLOBALS_SIZE);
         new Matrix4f(matrices.projection()).getToAddress(ptr);
@@ -167,7 +173,7 @@ public final class IrisTerrainPass {
         MemoryUtil.memPutFloat(ptr + 164, texelHeight);
         MemoryUtil.memPutFloat(ptr + 168, texCoordShrinkX);
         MemoryUtil.memPutFloat(ptr + 172, texCoordShrinkY);
-        MemoryUtil.memPutFloat(ptr + 176, 0.0f); // fade period: unused, fading is disabled through u_SectionTimeInfo
+        MemoryUtil.memPutFloat(ptr + 176, fadePeriodInv);
         MemoryUtil.memPutInt(ptr + 180, rgss ? 1 : 0);
         MemoryUtil.memSet(ptr + 184, 0, GLOBALS_SIZE - 184);
 
@@ -177,7 +183,8 @@ public final class IrisTerrainPass {
         MemoryUtil.memPutFloat(ptr + 8, cameraOffset.z());
         MemoryUtil.memPutFloat(ptr + 12, 0.0f);
         MemoryUtil.memPutLong(ptr + 16, terrainAddress);
-        MemoryUtil.memPutLong(ptr + 24, 0);
+        MemoryUtil.memPutInt(ptr + 24, fadeClock);
+        MemoryUtil.memPutInt(ptr + 28, 0);
     }
 
     /**

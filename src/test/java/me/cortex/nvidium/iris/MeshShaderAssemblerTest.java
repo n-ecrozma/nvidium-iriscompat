@@ -81,6 +81,19 @@ class MeshShaderAssemblerTest {
     }
 
     @Test
+    void chunkFadeInputs() {
+        assertTrue(mesh.contains("_nv_sectionTime = _nv_section_fade_start();"));
+        assertTrue(mesh.contains("iris_CurrentTime = _nv_currentTime;"));
+        assertTrue(mesh.indexOf("int _nv_sectionTime;") < mesh.indexOf("// ---- shader pack vertex stage ----"),
+                "declared before the pack code that reads it");
+        assertTrue(mesh.contains("return _nv_task.sectionFadeStart;"));
+        var layout = new MeshShaderAssembler.VertexLayout(7, Map.of());
+        String translucent = MeshShaderAssembler.assemble(MeshShaderAssembler.Kind.TRANSLUCENT, stage, layout, 32, java.util.List.of());
+        assertTrue(translucent.contains("_nv_sectionTime = _nv_section_fade_start();"));
+        assertTrue(translucent.contains("int sectionFadeStart;"));
+    }
+
+    @Test
     void solidCutoutFilter() {
         // Opaque programs can skip solid or cutout quads (marked with bit 17 of word 4 when repacking)
         assertTrue(mesh.contains("uniform int _nv_quadFilter;"));

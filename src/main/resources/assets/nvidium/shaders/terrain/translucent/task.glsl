@@ -30,12 +30,15 @@ taskNV out Task {
     uint8_t jiggle;
     #endif
     int translucencyIndex;
+    //For shader packs' mc_chunkFade (Section.fadeStart)
+    int sectionFadeStart;
 };
 
 void main() {
     uint sectionId = sectionIndices[gl_WorkGroupID.x].y + (gl_WorkGroupID.x & 0xFFFFFF00);
 
     translucencyIndex = sectionData[sectionId].translucencyDataIdx;
+    sectionFadeStart = sectionData[sectionId].fadeStart;
 
     ivec4 header = sectionData[sectionId].header;
     uint baseDataOffset = uint(header.w);

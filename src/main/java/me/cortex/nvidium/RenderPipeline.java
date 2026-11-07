@@ -375,7 +375,8 @@ public class RenderPipeline {
                     sectionManager.terrainAreana.buffer.getDeviceAddress(),
                     1.0f / textureAtlas.nvidium$getWidth(), 1.0f / textureAtlas.nvidium$getHeight(),
                     subTexelWidth, subTexelHeight,
-                    Minecraft.getInstance().options.textureFiltering().get() == TextureFilteringMethod.RGSS);
+                    Minecraft.getInstance().options.textureFiltering().get() == TextureFilteringMethod.RGSS,
+                    sectionManager.chunkFadeClock());
         }
 
         sectionManager.commitChanges();//Commit all uploads done to the terrain and meta data
@@ -715,7 +716,8 @@ public class RenderPipeline {
         irisShadowPass.upload(uploadStream, crm, fogParameters, delta, sectionManager.terrainAreana.buffer.getDeviceAddress(),
                 1.0f / textureAtlas.nvidium$getWidth(), 1.0f / textureAtlas.nvidium$getHeight(),
                 subTexelWidth, subTexelHeight,
-                Minecraft.getInstance().options.textureFiltering().get() == TextureFilteringMethod.RGSS);
+                Minecraft.getInstance().options.textureFiltering().get() == TextureFilteringMethod.RGSS,
+                sectionManager.chunkFadeClock());
 
         sectionManager.commitChanges();
         uploadStream.commit();

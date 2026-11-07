@@ -42,6 +42,7 @@ taskNV in Task {
     vec3 origin;
     uint quadCount;
     uint transformationId;
+    int sectionFadeStart;
 };
 
 

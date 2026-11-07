@@ -17,6 +17,7 @@ import io.github.douira.glsl_transformer.ast.node.external_declaration.Extension
 import io.github.douira.glsl_transformer.ast.node.external_declaration.ExternalDeclaration;
 import io.github.douira.glsl_transformer.ast.node.external_declaration.FunctionDefinition;
 import io.github.douira.glsl_transformer.ast.node.expression.ReferenceExpression;
+import io.github.douira.glsl_transformer.ast.node.expression.unary.FunctionCallExpression;
 import io.github.douira.glsl_transformer.ast.node.statement.CompoundStatement;
 import io.github.douira.glsl_transformer.ast.node.statement.Statement;
 import io.github.douira.glsl_transformer.ast.node.statement.loop.ForLoopStatement;
@@ -63,6 +64,8 @@ public final class MeshShaderTransformer {
     public static final String VERTEX_SLOT = "_nv_vid";
     public static final String POSITION = "_nv_vs_Position";
     public static final String VERTEX_ID = "_nv_VertexID";
+    /** When the current section first appeared; declared and set by the mesh shader templates. */
+    public static final String SECTION_TIME = "_nv_sectionTime";
     private static final String OUT_PREFIX = "_nv_vs_";
 
     private static final Pattern VERSION_PATTERN = Pattern.compile("#version\\s+(\\d+)");
@@ -149,6 +152,7 @@ public final class MeshShaderTransformer {
                 collectExtensions();
                 rewriteDeclarations();
                 referenceRenames.forEach(this::renameGlobalReferences);
+                replaceSectionTimeLookups();
                 redirectBuiltins();
                 if (!root.rename("main", PACK_MAIN)) {
                     throw new IllegalArgumentException("Vertex shader has no main function");
@@ -347,6 +351,20 @@ public final class MeshShaderTransformer {
                         globalInitializers.add(member.getName().getName() + " = " + print(initializer.getExpression()) + ";");
                         member.setInitializer(null);
                     }
+                }
+            }
+        }
+
+        /**
+         * Iris computes mc_chunkFade from {@code texelFetch(u_SectionTimeInfo, regionId * 256 + sectionIndex)}, the
+         * time the section appeared. Nvidium's task shader passes that time per section instead.
+         */
+        private void replaceSectionTimeLookups() {
+            for (Identifier identifier : List.copyOf(root.identifierIndex.get("u_SectionTimeInfo"))) {
+                if (identifier.getParent() instanceof ReferenceExpression reference
+                        && reference.getParent() instanceof FunctionCallExpression call
+                        && call.getFunctionName() != null && call.getFunctionName().getName().equals("texelFetch")) {
+                    call.replaceByAndDelete(parser.parseExpression(root, "ivec4(" + SECTION_TIME + ")"));
                 }
             }
         }
