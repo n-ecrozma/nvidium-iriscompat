@@ -9,7 +9,45 @@ automatically into mesh-shader programs, so packs work without hand edits.
   `IrisShaders/Iris` branch `26.3`, commit `671a5c8`).
 - Work branch: `iris-compat`.
 
-Status: design only. No code has changed yet.
+Status: **M1 implemented, not yet tested in game** (compiles; needs an NVIDIA GPU with
+Minecraft 26.3, Sodium 0.9.2 and Iris 1.11.6 to try).
+
+### What M1 does
+
+- New option **"Iris shader pack support (experimental)"** (`iris_support` in
+  `config/nvidium-config.json`, default off). With it on, Nvidium stays enabled while
+  a pack is active.
+- `TerrainVertexLayout` picks the terrain vertex layout once, when the renderer is
+  created. With a pack active, that's Iris's extended format
+  (`ChunkMeshFormats.getCurrent()`). Chunk repacking, the GPU geometry arena and the
+  shaders all use that choice instead of reading the config. The GLSL `Vertex` struct
+  is padded with `VERTEX_EXTRA_WORDS` so it matches the real stride.
+- During Iris's shadow pass, Nvidium draws nothing and ignores the shadow viewport.
+
+### Known M1 limitations (expected)
+
+- Terrain is drawn with **Nvidium's own shaders**, not the pack's (that's M2). Where
+  it lands depends on which framebuffer Iris has bound, so terrain may look wrong or
+  be hidden by the pack's composite passes.
+- **No terrain shadows** (M4).
+- If the pack enables Iris's separate-AO mode, vertex colours carry AO in alpha, which
+  Nvidium's built-in shader ignores. Ambient occlusion goes missing until M2.
+- Iris rebuilds the renderer only when a pack change requires it
+  (`WorldRenderingSettings.isReloadRequired()`). Otherwise the previous layout stays
+  in use until the next reload (F3+A). That's safe, because the chunk builder and
+  Nvidium always agree on the layout.
+
+### What to check when testing M1
+
+1. Option off, pack on → Nvidium turns off and Sodium renders the pack (upstream
+   behaviour unchanged).
+2. Option on, pack on → the log shows
+   `Terrain vertex layout: Sodium format, N bytes per vertex (Iris shader pack active)`
+   with N > 20 for most packs; no crash, GL errors or garbled geometry; F3 shows
+   Nvidium's debug lines.
+3. Option on, pack off → `Nvidium format, 16 bytes per vertex` (or Sodium format,
+   20 bytes, with "Use sodium vertex format" on), and rendering looks like upstream.
+4. Switching packs on and off repeatedly doesn't crash or leak.
 
 ---
 

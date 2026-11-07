@@ -36,8 +36,16 @@ public class ShaderLoader {
             builder.define("RENDER_FOG");
         }
 
-        if (Nvidium.config.use_sodium_vertex_format) {
+        var layout = TerrainVertexLayout.current();
+        if (layout.sodiumLayout) {
             builder.define("USE_SODIUM_VERTEX_FORMAT");
+            if (layout.extraWords() > 0) {
+                // Iris's extra per-vertex fields; pads the GLSL Vertex struct to the real stride
+                builder.define("VERTEX_EXTRA_WORDS", String.valueOf(layout.extraWords()));
+            }
+        }
+        if (layout.irisMode) {
+            builder.define("IRIS_SHADER_PACK");
         }
         if (Nvidium.config.cull_degenerate_triangles) {
             builder.define("CULL_DEGENERATE_TRIANGLES");

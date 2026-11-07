@@ -30,5 +30,9 @@
   "nvidium.options.statistics_level.quads" : "Quads",
   "nvidium.options.statistics_level.cull" : "Culled triangles",
   "nvidium.options.render_fog.name": "Render Fog",
-  "nvidium.options.render_fog.tooltip": "Should fog be rendered"
+  "nvidium.options.render_fog.tooltip": "Should fog be rendered",
+  "nvidium.options.iris_support.name": "Iris shader pack support (experimental)",
+  "nvidium.options.iris_support.tooltip": "Keep Nvidium rendering terrain while an Iris shader pack is active, instead of handing it back to Sodium.\nWork in progress: terrain does not use the pack's shaders yet and casts no shadows.",
+  "nvidium.options.disabled_by_shaders.name": "Nvidium disabled due to shaders being loaded",
+  "nvidium.options.disabled_by_shaders.tooltip": "Nvidium turns itself off while an Iris shader pack is active. Enable \"Iris shader pack support\" to keep it on."
 }

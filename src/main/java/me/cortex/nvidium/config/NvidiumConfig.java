@@ -25,6 +25,9 @@ public class NvidiumConfig {
     public boolean cull_degenerate_triangles = true;
     public boolean use_nv_fragment_shader_barycentric = true;
 
+    //Experimental: keep rendering with Nvidium while an Iris shader pack is active
+    public boolean iris_support = false;
+
     public TranslucencySortingLevel translucency_sorting_level = TranslucencySortingLevel.SODIUM;
 
     public StatisticsLoggingLevel statistics_level = StatisticsLoggingLevel.NONE;

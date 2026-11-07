@@ -1,6 +1,7 @@
 package me.cortex.nvidium.config;
 
 import me.cortex.nvidium.Nvidium;
+import me.cortex.nvidium.sodiumCompat.IrisCompat;
 import me.cortex.nvidium.sodiumCompat.NvidiumOptionFlags;
 import net.caffeinemc.mods.sodium.api.config.ConfigEntryPoint;
 import net.caffeinemc.mods.sodium.api.config.StorageEventHandler;
@@ -34,11 +35,23 @@ public class ConfigGuiBuilder implements ConfigEntryPoint {
                         .setStorageHandler(this.noSave)
         );
 
+        nvidiumOptionPage.addOption(
+                builder.createBooleanOption(Identifier.parse("nvidium:iris_support"))
+                        .setName(Component.translatable("nvidium.options.iris_support.name"))
+                        .setTooltip(Component.translatable("nvidium.options.iris_support.tooltip"))
+                        .setDefaultValue(false)
+                        .setBinding(v -> store.getData().iris_support = v, () -> store.getData().iris_support)
+                        .setEnabledProvider(c -> Nvidium.IS_COMPATIBLE && IrisCompat.IRIS_LOADED)
+                        .setImpact(OptionImpact.HIGH)
+                        .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+                        .setStorageHandler(this.saveConfig)
+        );
+
         if (Nvidium.IS_COMPATIBLE && !Nvidium.IS_ENABLED && !Nvidium.FORCE_DISABLE) {
             nvidiumOptionPage.addOption(
                     builder.createBooleanOption(Identifier.parse("nvidium:force_disabled_nvidium"))
-                            .setName(Component.literal("Nvidium disabled due to shaders being loaded"))
-                            .setTooltip(Component.literal("Nvidium disabled due to shaders being loaded"))
+                            .setName(Component.translatable("nvidium.options.disabled_by_shaders.name"))
+                            .setTooltip(Component.translatable("nvidium.options.disabled_by_shaders.tooltip"))
                             .setImpact(OptionImpact.VARIES)
                             .setDefaultValue(true)
                             .setBinding((v) -> {}, () -> false)

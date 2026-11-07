@@ -29,7 +29,7 @@ public class MixinRenderSectionManager implements INvidiumWorldRendererGetter {
 
     @Unique
     private static void updateNvidiumIsEnabled() {
-        Nvidium.IS_ENABLED = (!Nvidium.FORCE_DISABLE) && Nvidium.IS_COMPATIBLE && IrisCheck.checkIrisShouldDisable();
+        Nvidium.IS_ENABLED = (!Nvidium.FORCE_DISABLE) && Nvidium.IS_COMPATIBLE && !IrisCompat.shouldDisableNvidium();
     }
 
     @Inject(method = "<init>", at = @At("TAIL"))
@@ -46,8 +46,13 @@ public class MixinRenderSectionManager implements INvidiumWorldRendererGetter {
     @ModifyArg(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/executor/ChunkBuilder;<init>(Lnet/minecraft/client/multiplayer/ClientLevel;Lnet/caffeinemc/mods/sodium/client/render/chunk/vertex/format/ChunkVertexType;)V", remap = true), index = 1)
     private ChunkVertexType modifyVertexType(ChunkVertexType vertexType) {
         updateNvidiumIsEnabled();
-        if (Nvidium.IS_ENABLED && !Nvidium.config.use_sodium_vertex_format) {
-            return NvidiumCompactChunkVertex.INSTANCE;
+        if (Nvidium.IS_ENABLED) {
+            // Decide the layout here: the chunk builder is created before the end of the constructor,
+            // where the NvidiumWorldRenderer (which sizes its geometry buffer from the layout) is created.
+            var layout = TerrainVertexLayout.select();
+            if (layout.vertexType != null) {
+                return layout.vertexType;
+            }
         }
         return vertexType;
     }

@@ -11,6 +11,11 @@ struct Vertex {
     uint8_t skyLight;
     uint8_t material;
     uint8_t section;
+
+#ifdef VERTEX_EXTRA_WORDS
+    // Iris's extended vertex format appends blockId, normal, midUV and/or midBlock (4 bytes each)
+    uint extra[VERTEX_EXTRA_WORDS];
+#endif
 };
 #else
 #define Vertex uvec4

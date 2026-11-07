@@ -6,6 +6,7 @@ import com.mojang.renderpearl.api.textures.GpuSampler;
 import com.mojang.renderpearl.backend.opengl.GlStateManager;
 import com.mojang.renderpearl.frontend.FrontendRenderPass;
 import me.cortex.nvidium.Nvidium;
+import me.cortex.nvidium.sodiumCompat.IrisCompat;
 import me.cortex.nvidium.NvidiumWorldRenderer;
 import me.cortex.nvidium.mixin.minecraft.FrontendCommandEncoderAccessor;
 import me.cortex.nvidium.mixin.minecraft.GlCommandEncoderAccessor;
@@ -46,6 +47,10 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
 
     @Inject(method = "setupTerrain", at = @At(value = "HEAD"))
     public void trackViewport(Camera camera, Viewport viewport, FogParameters fogParameters, boolean spectator, boolean updateChunksImmediately, Matrix4f cullMatrix, CallbackInfo ci) {
+        // Iris also calls setupTerrain for its shadow pass, with the shadow frustum. Keep the player's viewport.
+        if (IrisCompat.isRenderingShadowPass()) {
+            return;
+        }
         this.viewport = viewport;
     }
 
@@ -55,6 +60,14 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
             ci.cancel();
             if (pass == DefaultTerrainRenderPasses.CUTOUT) // Early exit, cutout will be rendered with SOLID
                 return;
+
+            // TODO(iris): draw terrain into the shadow map (milestone M4). Until then terrain casts no shadows.
+            // Rendering a normal Nvidium frame from the shadow camera would corrupt the occlusion culling state,
+            // which is built from the player's view and reused across frames. Sodium has no geometry to fall back
+            // on either, since Nvidium takes over the uploads.
+            if (IrisCompat.isRenderingShadowPass()) {
+                return;
+            }
 
             // Invalidate lastProgram to prevent B3D caching bad program
             ((GlCommandEncoderAccessor)

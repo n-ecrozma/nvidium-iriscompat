@@ -7,8 +7,6 @@ import net.caffeinemc.mods.sodium.client.model.quad.properties.ModelQuadFacing;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput;
 import net.caffeinemc.mods.sodium.client.render.chunk.data.BuiltSectionMeshParts;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.DefaultTerrainRenderPasses;
-import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.ChunkMeshFormats;
-import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.impl.CompactChunkVertex;
 import net.caffeinemc.mods.sodium.client.util.NativeBuffer;
 import net.minecraft.client.Minecraft;
 import org.joml.Vector3i;
@@ -52,12 +50,19 @@ public class SodiumResultCompatibility {
     }
 
 
-    private static void copyQuad(long from, long too) {
-        //Quads are 64 bytes big using NvidiumCompactChunkVertex otherwise 80 bytes using CompactChunkVertex
-        long quadSize = Nvidium.config.use_sodium_vertex_format ?
-                CompactChunkVertex.STRIDE * 4 :
-                NvidiumCompactChunkVertex.STRIDE * 4;
-        MemoryUtil.memCopy(from, too, quadSize);
+    private static void copyQuad(long from, long too, int formatSize) {
+        //Quads are 64 bytes using NvidiumCompactChunkVertex, 80 bytes using Sodium's CompactChunkVertex,
+        // and more with Iris's extended vertex format
+        MemoryUtil.memCopy(from, too, 4L * formatSize);
+    }
+
+    /**
+     * Whether vertices of this size use Sodium's layout (20 bytes, or more with Iris's extra fields)
+     * rather than Nvidium's 16-byte layout. Derived from the size captured when the build task started,
+     * so a task never mixes layouts if the renderer is reloaded while it runs.
+     */
+    private static boolean isSodiumLayout(int formatSize) {
+        return formatSize != NvidiumCompactChunkVertex.STRIDE;
     }
 
     private static int[] computeRanges(int[] segments) {
@@ -84,7 +89,7 @@ public class SodiumResultCompatibility {
         //Update the meta bits of the model format
         for (int j = 0; j < count; j++) {
             long base = dst + (long) j * formatSize;
-            updateSectionBounds(min, max, base);
+            updateSectionBounds(min, max, base, formatSize);
         }
 
         return count / 4;
@@ -156,7 +161,7 @@ public class SodiumResultCompatibility {
                     long base = src + (long) j * formatSize;
 
                     float x, y, z;
-                    if (Nvidium.config.use_sodium_vertex_format) {
+                    if (isSodiumLayout(formatSize)) {
                         int hi = MemoryUtil.memGetInt(base);
                         int lo = MemoryUtil.memGetInt(base + 4);
 
@@ -169,7 +174,7 @@ public class SodiumResultCompatibility {
                         y = decodePosition(MemoryUtil.memGetShort(base + 2));
                         z = decodePosition(MemoryUtil.memGetShort(base + 4));
                     }
-                    updateSectionBounds(min, max, base);
+                    updateSectionBounds(min, max, base, formatSize);
 
                     cx += x;
                     cy += y;
@@ -209,7 +214,7 @@ public class SodiumResultCompatibility {
 
             for (int i = 0; i < sortingData.length; i++) {
                 long data = sortingData[i];
-                copyQuad(srcs[(int) (data&7)] + ((data>>3)&((1L<<29)-1))*4*formatSize, outPtr + ((sortingData.length-1)-i) * 4L * formatSize);
+                copyQuad(srcs[(int) (data&7)] + ((data>>3)&((1L<<29)-1))*4*formatSize, outPtr + ((sortingData.length-1)-i) * 4L * formatSize, formatSize);
             }
             offset += quadCount;
         }
@@ -266,10 +271,10 @@ public class SodiumResultCompatibility {
         return (((float)pos) * vertexScale) - 8;
     }
 
-    private static void updateSectionBounds(Vector3i min, Vector3i max, long vertex) {
+    private static void updateSectionBounds(Vector3i min, Vector3i max, long vertex, int formatSize) {
         float x, y, z;
 
-        if (Nvidium.config.use_sodium_vertex_format) {
+        if (isSodiumLayout(formatSize)) {
             int hi = MemoryUtil.memGetInt(vertex);
             int lo = MemoryUtil.memGetInt(vertex + 4);
 
