@@ -25,7 +25,8 @@
   },
   "accessWidener" : "nvidium.accesswidener",
   "mixins": [
-    "nvidium.mixins.json"
+    "nvidium.mixins.json",
+    "nvidium.iris.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.18.4",

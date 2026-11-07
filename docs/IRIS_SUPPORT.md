@@ -9,45 +9,78 @@ automatically into mesh-shader programs, so packs work without hand edits.
   `IrisShaders/Iris` branch `26.3`, commit `671a5c8`).
 - Work branch: `iris-compat`.
 
-Status: **M1 implemented, not yet tested in game** (compiles; needs an NVIDIA GPU with
-Minecraft 26.3, Sodium 0.9.2 and Iris 1.11.6 to try).
+Status: **M1 tested in game** (Nvidium stays on with a pack and places terrain correctly; terrain
+had no pack shading, as expected). **M2 implemented, not yet tested in game**: compiles, and
+16 unit tests pass (shader rewriting, mesh shader assembly and syntax, and the mixin targets
+checked against the Iris jar).
 
-### What M1 does
+### Milestone log
 
-- New option **"Iris shader pack support (experimental)"** (`iris_support` in
-  `config/nvidium-config.json`, default off). With it on, Nvidium stays enabled while
-  a pack is active.
-- `TerrainVertexLayout` picks the terrain vertex layout once, when the renderer is
-  created. With a pack active, that's Iris's extended format
-  (`ChunkMeshFormats.getCurrent()`). Chunk repacking, the GPU geometry arena and the
-  shaders all use that choice instead of reading the config. The GLSL `Vertex` struct
-  is padded with `VERTEX_EXTRA_WORDS` so it matches the real stride.
-- During Iris's shadow pass, Nvidium draws nothing and ignores the shadow viewport.
+**M1, keep Nvidium on with a pack.** Option **"Iris shader pack support (experimental)"**
+(`iris_support` in `config/nvidium-config.json`, default off). `TerrainVertexLayout` picks the
+vertex layout once per renderer; with a pack active it is Iris's extended format, and chunk
+repacking, the geometry arena and the shaders all follow it. Nvidium draws nothing in Iris's
+shadow pass. Tested with BlackHole: terrain depth and shape were right, colour was missing
+because Nvidium's own shader doesn't write the pack's G-buffers.
 
-### Known M1 limitations (expected)
+**M2, opaque terrain through the pack's shaders.** How it works (code in `me.cortex.nvidium.iris`):
 
-- Terrain is drawn with **Nvidium's own shaders**, not the pack's (that's M2). Where
-  it lands depends on which framebuffer Iris has bound, so terrain may look wrong or
-  be hidden by the pack's composite passes.
+1. `MixinIrisRenderingPipeline`: after Iris creates the pack's program for Sodium's
+   `SODIUM_TERRAIN_CUTOUT`, it asks Iris to create it twice more (Nvidium's primary and
+   temporal passes) with the same framebuffers, alpha test and uniforms.
+2. `MixinShaderCreator`: during those two calls, Iris's final `link` step is replaced by
+   `MeshProgramLinker`, which receives Iris's fully patched sources.
+3. `MeshShaderTransformer` (glsl-transformer, the parser Iris uses) rewrites the patched
+   vertex shader into a function: inputs become globals, outputs go to `_nv_vs_*` globals
+   with generated per-vertex mesh outputs, `iris_SodiumPushConstants` becomes globals,
+   `gl_Position`/`gl_VertexID` are redirected, `main` is renamed, and global initializers
+   (Iris's `iris_Entity`, `iris_MidTex`, ...) are moved into a function re-run per vertex.
+4. `MeshShaderAssembler` fills `shaders/terrain/iris/mesh.glsl`: it loads each vertex from
+   Nvidium's terrain buffer into the pack's inputs, using the field offsets from Iris's actual
+   vertex format, sets `iris_RegionOffset` to the section's camera-relative position, runs the
+   pack function for each vertex and emits the triangles like `terrain/mesh.glsl`. It
+   deliberately does not enable `GL_NV_gpu_shader5`, which makes common pack code like
+   `clamp(x, 0, 1.0)` ambiguous.
+5. The program (Nvidium's task shader + generated mesh shader + the pack's fragment shader,
+   unchanged) is wrapped by Iris in a normal `ExtendedShader`, which sets the pack's uniforms,
+   samplers, G-buffer framebuffer and blending. Nvidium's `SceneData` block moves to uniform
+   buffer slot 8, because Iris puts the pack's `u_Globals` on slot 0.
+6. `IrisTerrainPass` draws with it: it fills a `u_Globals` block like Sodium's, binds the block
+   atlas (nearest filtering with mipmaps, as Iris does), the lightmap, and a one-entry
+   `u_SectionTimeInfo` that disables chunk fade-in.
+
+If building fails (for example a pack whose terrain program uses geometry or tessellation
+shaders), Nvidium logs the reason and keeps drawing terrain with its own shaders. If the pack's
+per-vertex outputs exceed the mesh shader output limit, the linker retries with 16 and then 8
+threads per workgroup. Sources of a program that fails are written to `nvidium-iris-debug/` in
+the game folder; start the game with `-Dnvidium.isDebug=TRUE` to write them for every program.
+
+### Known limitations after M2
+
+- Solid and cutout terrain share the pack's **cutout** program (Nvidium draws them in one
+  pass). Packs whose `gbuffers_terrain_solid` and `gbuffers_terrain_cutout` differ will show
+  the cutout version for solid blocks.
+- **Water and other translucent blocks** still use Nvidium's own shader (M3).
 - **No terrain shadows** (M4).
-- If the pack enables Iris's separate-AO mode, vertex colours carry AO in alpha, which
-  Nvidium's built-in shader ignores. Ambient occlusion goes missing until M2.
-- Iris rebuilds the renderer only when a pack change requires it
-  (`WorldRenderingSettings.isReloadRequired()`). Otherwise the previous layout stays
-  in use until the next reload (F3+A). That's safe, because the chunk builder and
-  Nvidium always agree on the layout.
+- Chunk fade-in is disabled (`mc_chunkFade` is always 1).
+- Region transforms set through `NvidiumAPI` are ignored for pack-shaded terrain.
+- `gl_ClipDistance`/`gl_CullDistance` written by a pack's vertex shader are not forwarded.
+- Changing Nvidium's fog or statistics option needs a shader pack reload (F3+R) before the
+  pack programs are used again; until then terrain uses Nvidium's shaders.
+- Pinned to Iris 1.11.6 internals. `IrisMixinTargetsTest` fails the build if a hooked
+  method changes.
 
-### What to check when testing M1
+### What to check when testing M2
 
-1. Option off, pack on → Nvidium turns off and Sodium renders the pack (upstream
-   behaviour unchanged).
-2. Option on, pack on → the log shows
-   `Terrain vertex layout: Sodium format, N bytes per vertex (Iris shader pack active)`
-   with N > 20 for most packs; no crash, GL errors or garbled geometry; F3 shows
-   Nvidium's debug lines.
-3. Option on, pack off → `Nvidium format, 16 bytes per vertex` (or Sodium format,
-   20 bytes, with "Use sodium vertex format" on), and rendering looks like upstream.
-4. Switching packs on and off repeatedly doesn't crash or leak.
+1. With a pack loaded, F3 shows `Shader pack terrain: pack shaders (N B/vertex)`. If it shows
+   `Nvidium shaders (...)`, the reason follows; the log has the full error.
+2. Terrain is lit and coloured by the pack, with no gaps, flicker or garbled triangles, also
+   while turning quickly (the temporal pass draws newly visible sections).
+3. Pack features that use vertex data look right: waving plants (`mc_Entity`, `mc_midTexCoord`),
+   normal and parallax maps (`at_tangent`), block-ID-based effects.
+4. Try several packs. The log line `built shader pack terrain programs` confirms success; a
+   warning about retrying with fewer threads means the pack has large per-vertex outputs.
+5. Switching packs and toggling shaders repeatedly doesn't crash or leak.
 
 ---
 
@@ -164,16 +197,18 @@ Input: the patched Sodium VS from Iris. Transformations:
    `terrainData` (the Nvidium buffer pointer).
 3. **Region and section data:** Iris's `_vert_init` computes the position as
    `_vert_position + iris_RegionOffset + _get_draw_translation(_draw_id)`.
-   Make `_get_draw_translation` return Nvidium's per-section `origin` (from the
-   task payload) and set `iris_RegionOffset` to 0. Check this against
-   Nvidium's camera-relative convention and `transformationArray`.
+   *As built:* the section index in `a_LightAndData.w` is forced to 0, so
+   `_get_draw_translation` returns 0, and `iris_RegionOffset` (now a global) is
+   set to the task's `origin` plus Nvidium's camera offset within its chunk.
+   Region transforms (`transformationArray`) are not applied yet.
 4. **Outputs:** for every `out` varying `T name`:
    - Rename the global to `_nv_vs_name`. The pack body writes to it as usual.
    - Declare a mesh output `out T name[]`, keeping its layout, `flat` and
      interpolation qualifiers, so it links by name to the pack's FS `in T name`.
    - After each call, copy `name[vid] = _nv_vs_name`.
-   - Reset the globals to zero before each call, so values from one vertex
-     can't leak into the next.
+   - *As built:* instead of zeroing every global, the pack's global
+     initializers are re-run before each vertex, and `_nv_vs_Position` is reset.
+     Globals without initializers are undefined in a vertex shader too.
 5. `gl_Position` → `_nv_vs_Position` → `gl_MeshVerticesNV[vid].gl_Position`.
    The **pack's** `gl_Position` is required because packs apply TAA jitter
    and shadow distortion. Also carry over `gl_ClipDistance` if the pack writes

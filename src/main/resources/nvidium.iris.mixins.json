@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "package": "me.cortex.nvidium.mixin.iris",
+  "plugin": "me.cortex.nvidium.mixin.iris.IrisMixinPlugin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "MixinIrisRenderingPipeline",
+    "MixinShaderCreator"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

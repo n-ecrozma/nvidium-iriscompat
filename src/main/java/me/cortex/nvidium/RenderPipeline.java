@@ -7,11 +7,14 @@ import me.cortex.nvidium.config.StatisticsLoggingLevel;
 import me.cortex.nvidium.config.TranslucencySortingLevel;
 import me.cortex.nvidium.gl.RenderDevice;
 import me.cortex.nvidium.gl.buffers.IDeviceMappedBuffer;
+import me.cortex.nvidium.iris.IrisTerrainPass;
+import me.cortex.nvidium.iris.IrisTerrainPrograms;
 import me.cortex.nvidium.managers.RegionManager;
 import me.cortex.nvidium.managers.RegionVisibilityTracker;
 import me.cortex.nvidium.managers.SectionManager;
 import me.cortex.nvidium.mixin.minecraft.TextureAtlasAccessor;
 import me.cortex.nvidium.renderers.*;
+import me.cortex.nvidium.sodiumCompat.TerrainVertexLayout;
 import me.cortex.nvidium.util.*;
 import net.caffeinemc.mods.sodium.client.SodiumClientMod;
 import net.caffeinemc.mods.sodium.client.gpu.GPULimits;
@@ -65,6 +68,8 @@ public class RenderPipeline {
     private CmdBufferBuilder cmdBufferBuilder;
 
     private final IDeviceMappedBuffer sceneUniform;
+    //Draws terrain with the Iris shader pack's programs; only exists while a shader pack is active
+    private final IrisTerrainPass irisTerrainPass;
     private static final int SCENE_SIZE = (int) alignUp(
                     4*4*4 +  // mat4     MVP
                     4*4*4 + // mat4      MVPInv (Optional)
@@ -140,6 +145,7 @@ public class RenderPipeline {
         int maxRegions = sectionManager.getRegionManager().maxRegions();
 
         sceneUniform = device.createDeviceOnlyMappedBuffer(SCENE_SIZE + maxRegions*2L);
+        irisTerrainPass = TerrainVertexLayout.current().irisMode ? new IrisTerrainPass(device) : null;
         regionVisibility = device.createDeviceOnlyMappedBuffer(maxRegions);
         sectionVisibility = device.createDeviceOnlyMappedBuffer(maxRegions * 256L);
         sectionIndices = device.createDeviceOnlyMappedBuffer(maxRegions * 256L * 3L);
@@ -390,6 +396,17 @@ public class RenderPipeline {
             regionsToSort.clear();
         }
 
+        //Shader pack terrain programs to draw with this frame, if any (otherwise Nvidium's own terrain shaders)
+        final IrisTerrainPrograms.Programs irisPrograms = irisTerrainPass != null ? irisTerrainPass.programsForFrame() : null;
+        if (irisPrograms != null) {
+            Vector3f cameraOffset = new Vector3f((float) (px-(chunkPos.x<<4)), (float) (py-(chunkPos.y<<4)), (float) (pz-(chunkPos.z<<4))).negate();
+            irisTerrainPass.upload(uploadStream, crm, fogParameters, cameraOffset,
+                    sectionManager.terrainAreana.buffer.getDeviceAddress(),
+                    1.0f / textureAtlas.nvidium$getWidth(), 1.0f / textureAtlas.nvidium$getHeight(),
+                    subTexelWidth, subTexelHeight,
+                    Minecraft.getInstance().options.textureFiltering().get() == TextureFilteringMethod.RGSS);
+        }
+
         sectionManager.commitChanges();//Commit all uploads done to the terrain and meta data
         uploadStream.commit();
 
@@ -409,7 +426,15 @@ public class RenderPipeline {
 
         if (prevRegionCount != 0) {
             glEnable(GL_DEPTH_TEST);
-            terrainRasterizer.raster(pass, prevRegionCount, terrainCommandBuffer.getDeviceAddress(), terrainSampler);
+            if (irisPrograms != null) {
+                final int regionCount = prevRegionCount;
+                terrainRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.PRIMARY, pass,
+                        regionCount, terrainCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
+                //The pack program used slot 0 for its own uniforms; Nvidium's shaders expect SceneData there
+                glBufferAddressRangeNV(GL_UNIFORM_BUFFER_ADDRESS_NV, 0, sceneUniform.getDeviceAddress(), SCENE_SIZE);
+            } else {
+                terrainRasterizer.raster(pass, prevRegionCount, terrainCommandBuffer.getDeviceAddress(), terrainSampler);
+            }
             glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT);
         }
 
@@ -468,7 +493,14 @@ public class RenderPipeline {
         //Do temporal rasterization
         if (Nvidium.config.enable_temporal_coherence) {
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
-            temporalRasterizer.raster(pass, visibleRegions, temporalCommandBuffer.getDeviceAddress(), terrainSampler);
+            if (irisPrograms != null) {
+                final int regionCount = visibleRegions;
+                temporalRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.TEMPORAL, pass,
+                        regionCount, temporalCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
+                glBufferAddressRangeNV(GL_UNIFORM_BUFFER_ADDRESS_NV, 0, sceneUniform.getDeviceAddress(), SCENE_SIZE);
+            } else {
+                temporalRasterizer.raster(pass, visibleRegions, temporalCommandBuffer.getDeviceAddress(), terrainSampler);
+            }
         }
 
 
@@ -561,6 +593,9 @@ public class RenderPipeline {
         regionVisibilityTracking.delete();
 
         sceneUniform.delete();
+        if (irisTerrainPass != null) {
+            irisTerrainPass.delete();
+        }
         regionVisibility.delete();
         sectionVisibility.delete();
         sectionIndices.delete();
@@ -585,6 +620,9 @@ public class RenderPipeline {
     }
 
     public void addDebugInfo(List<String> info) {
+        if (irisTerrainPass != null) {
+            info.add(irisTerrainPass.debugStatus());
+        }
         if (Nvidium.config.statistics_level != StatisticsLoggingLevel.NONE) {
             StringBuilder builder = new StringBuilder();
             builder.append("Statistics: ");

@@ -1,4 +1,8 @@
+// Threads per mesh shader workgroup (two per quad). The Iris path can lower it for shader packs whose
+// per-vertex outputs don't fit in a 64-vertex mesh workgroup.
+#ifndef MESH_WORKLOAD_PER_INVOCATION
 #define MESH_WORKLOAD_PER_INVOCATION 32
+#endif
 
 taskNV out Task {
     //Very compacted search indexs and data
