@@ -19,6 +19,10 @@ import me.cortex.nvidium.util.*;
 import net.caffeinemc.mods.sodium.client.SodiumClientMod;
 import net.caffeinemc.mods.sodium.client.gpu.GPULimits;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
+import net.caffeinemc.mods.sodium.client.render.chunk.lists.ChunkRenderList;
+import net.caffeinemc.mods.sodium.client.render.chunk.lists.SortedRenderLists;
+import net.caffeinemc.mods.sodium.client.render.chunk.region.RenderRegion;
+import net.caffeinemc.mods.sodium.client.util.iterator.ByteIterator;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.impl.CompactChunkVertex;
 import net.caffeinemc.mods.sodium.client.render.viewport.Viewport;
@@ -75,6 +79,8 @@ public class RenderPipeline {
     private final IrisTerrainPass irisShadowPass;
     private final IDeviceMappedBuffer shadowSceneUniform;
     private final IDeviceMappedBuffer shadowSectionIndices;
+    //One byte per section: 1 if Sodium's shadow render list (built from Iris's shadow frustum) contains it
+    private final IDeviceMappedBuffer shadowSectionVisibility;
     private final IDeviceMappedBuffer shadowTerrainCommandBuffer;
     private final IDeviceMappedBuffer shadowTranslucencyCommandBuffer;
     private ShadowCmdBufferBuilder shadowCmdBufferBuilder;
@@ -82,6 +88,7 @@ public class RenderPipeline {
     private final Phase shadowTerrainTiming = new Phase() {};
     private final Phase shadowTranslucentTiming = new Phase() {};
     private int lastShadowRegionCount;
+    private int lastShadowSectionCount;
     private static final int SCENE_SIZE = (int) alignUp(
                     4*4*4 +  // mat4     MVP
                     4*4*4 + // mat4      MVPInv (Optional)
@@ -162,6 +169,7 @@ public class RenderPipeline {
             irisShadowPass = new IrisTerrainPass(device);
             shadowSceneUniform = device.createDeviceOnlyMappedBuffer(SCENE_SIZE + maxRegions*2L);
             shadowSectionIndices = device.createDeviceOnlyMappedBuffer(maxRegions * 256L * 3L);
+            shadowSectionVisibility = device.createDeviceOnlyMappedBuffer(maxRegions * 256L);
             shadowTerrainCommandBuffer = device.createDeviceOnlyMappedBuffer(maxRegions*8L);
             shadowTranslucencyCommandBuffer = device.createDeviceOnlyMappedBuffer(maxRegions*8L);
             shadowCmdBufferBuilder = new ShadowCmdBufferBuilder();
@@ -169,6 +177,7 @@ public class RenderPipeline {
             irisShadowPass = null;
             shadowSceneUniform = null;
             shadowSectionIndices = null;
+            shadowSectionVisibility = null;
             shadowTerrainCommandBuffer = null;
             shadowTranslucencyCommandBuffer = null;
             shadowCmdBufferBuilder = null;
@@ -333,7 +342,7 @@ public class RenderPipeline {
             delta.negate();
             long addr = uploadStream.upload(sceneUniform, 0, SCENE_SIZE);
             writeSceneData(addr, crm, chunkPos, delta, fogParameters,
-                    sceneUniform.getDeviceAddress() + SCENE_SIZE, sectionIndices.getDeviceAddress(),
+                    sceneUniform.getDeviceAddress() + SCENE_SIZE, sectionVisibility.getDeviceAddress(), sectionIndices.getDeviceAddress(),
                     terrainCommandBuffer.getDeviceAddress(), translucencyCommandBuffer.getDeviceAddress(),
                     temporalCommandBuffer.getDeviceAddress(), visibleRegions, (byte) (frameId++),
                     screenWidth, screenHeight, textureAtlas, subTexelWidth, subTexelHeight);
@@ -492,7 +501,7 @@ public class RenderPipeline {
      * their own region list, section lists and command buffers.
      */
     private void writeSceneData(long addr, ChunkRenderMatrices crm, Vector3i chunkPos, Vector3f delta, FogParameters fogParameters,
-                                long regionIndicesAddress, long sectionIndicesAddress, long terrainCommandsAddress,
+                                long regionIndicesAddress, long sectionVisibilityAddress, long sectionIndicesAddress, long terrainCommandsAddress,
                                 long translucencyCommandsAddress, long temporalCommandsAddress, int regionCount, byte frame,
                                 int screenWidth, int screenHeight, TextureAtlasAccessor textureAtlas,
                                 float subTexelWidth, float subTexelHeight) {
@@ -520,7 +529,7 @@ public class RenderPipeline {
         addr += 8;
         MemoryUtil.memPutLong(addr, regionVisibility.getDeviceAddress());
         addr += 8;
-        MemoryUtil.memPutLong(addr, sectionVisibility.getDeviceAddress());
+        MemoryUtil.memPutLong(addr, sectionVisibilityAddress);
         addr += 8;
         MemoryUtil.memPutLong(addr, sectionIndicesAddress);
         addr += 8;
@@ -593,15 +602,18 @@ public class RenderPipeline {
     //Translucency is rendered in a very cursed and incorrect way
     // it hijacks the unassigned indirect command dispatch and uses that to dispatch the translucent chunks as well
     /**
-     * Draws terrain into Iris's shadow map with the shader pack's shadow programs. There is no occlusion culling:
-     * visibility from the player's view doesn't apply to the sun's, so every section of each region inside the shadow
-     * frustum is drawn.
+     * Draws terrain into Iris's shadow map with the shader pack's shadow programs. Nvidium's occlusion culling is
+     * built from the player's view and doesn't apply to the sun's. Instead, the sections are the ones in Sodium's
+     * shadow render list, which Iris has Sodium build each frame by testing every section against its shadow frustum
+     * (including the pack's shadow distance), so exactly what Sodium would draw.
      *
      * @param viewport    Iris's shadow frustum, as passed to Sodium for the shadow pass
+     * @param shadowLists Sodium's render lists for the shadow pass, or null to draw every section of each region in
+     *                    the shadow frustum
      * @param translucent draw translucent terrain (shadow_water) instead of solid and cutout terrain
      */
-    public void renderShadow(TerrainRenderPass pass, Viewport viewport, FogParameters fogParameters, ChunkRenderMatrices crm,
-                             double px, double py, double pz, boolean translucent) {
+    public void renderShadow(TerrainRenderPass pass, Viewport viewport, SortedRenderLists shadowLists, FogParameters fogParameters,
+                             ChunkRenderMatrices crm, double px, double py, double pz, boolean translucent) {
         if (irisShadowPass == null || viewport == null) {
             return;
         }
@@ -618,19 +630,57 @@ public class RenderPipeline {
         Vector3i chunkPos = new Vector3i(((int)Math.floor(px))>>4, ((int)Math.floor(py))>>4, ((int)Math.floor(pz))>>4);
         Vector3f delta = new Vector3f((float) (px-(chunkPos.x<<4)), (float) (py-(chunkPos.y<<4)), (float) (pz-(chunkPos.z<<4))).negate();
 
-        IntArrayList regions = new IntArrayList();
-        for (int i = 0; i < rm.maxRegionIndex(); i++) {
-            if (rm.regionExists(i) && rm.isRegionVisible(viewport, i)) {
-                regions.add(i);
+        //Regions to draw, each with a 256-bit mask of its sections to draw
+        Int2ObjectLinkedOpenHashMap<long[]> sectionMasks = new Int2ObjectLinkedOpenHashMap<>();
+        int sectionCount = 0;
+        if (shadowLists != null) {
+            var lists = shadowLists.iterator(false);
+            while (lists.hasNext()) {
+                ChunkRenderList list = lists.next();
+                RenderRegion region = list.getRegion();
+                ByteIterator sections = list.sectionsWithGeometryIterator(false);
+                if (sections == null) {
+                    continue;
+                }
+                while (sections.hasNext()) {
+                    //Sodium's local section index packing (LocalSectionIndex): x in bits 5-7, y in 0-1, z in 2-4
+                    int local = sections.nextByteAsInt();
+                    int id = sectionManager.getSectionId(
+                            region.getChunkX() + ((local >> 5) & 7),
+                            region.getChunkY() + (local & 3),
+                            region.getChunkZ() + ((local >> 2) & 7));
+                    if (id == -1 || !rm.regionExists(id >> 8)) {
+                        continue;
+                    }
+                    int slot = id & 0xFF;
+                    sectionMasks.computeIfAbsent(id >> 8, k -> new long[4])[slot >> 6] |= 1L << (slot & 63);
+                    sectionCount++;
+                }
+            }
+        } else {
+            for (int i = 0; i < rm.maxRegionIndex(); i++) {
+                if (rm.regionExists(i) && rm.isRegionVisible(viewport, i)) {
+                    sectionMasks.put(i, new long[]{-1, -1, -1, -1});
+                    sectionCount += 256;
+                }
             }
         }
-        if (regions.isEmpty()) {
+        if (sectionMasks.isEmpty()) {
             return;
         }
-        int regionCount = regions.size();
+
+        int regionCount = sectionMasks.size();
         long regionList = uploadStream.upload(shadowSceneUniform, SCENE_SIZE, regionCount*2L);
-        for (int j = 0; j < regionCount; j++) {
-            MemoryUtil.memPutShort(regionList + j*2L, (short) regions.getInt(j));
+        int j = 0;
+        for (var entry : sectionMasks.int2ObjectEntrySet()) {
+            int region = entry.getIntKey();
+            MemoryUtil.memPutShort(regionList + j*2L, (short) region);
+            j++;
+            long[] mask = entry.getValue();
+            long visibility = uploadStream.upload(shadowSectionVisibility, (long) region << 8, 256);
+            for (int slot = 0; slot < 256; slot++) {
+                MemoryUtil.memPutByte(visibility + slot, (byte) ((mask[slot >> 6] >>> (slot & 63)) & 1));
+            }
         }
 
         var textureAtlas = (TextureAtlasAccessor) Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
@@ -641,7 +691,7 @@ public class RenderPipeline {
 
         long sceneAddr = uploadStream.upload(shadowSceneUniform, 0, SCENE_SIZE);
         writeSceneData(sceneAddr, crm, chunkPos, delta, fogParameters,
-                shadowSceneUniform.getDeviceAddress() + SCENE_SIZE, shadowSectionIndices.getDeviceAddress(),
+                shadowSceneUniform.getDeviceAddress() + SCENE_SIZE, shadowSectionVisibility.getDeviceAddress(), shadowSectionIndices.getDeviceAddress(),
                 shadowTerrainCommandBuffer.getDeviceAddress(), shadowTranslucencyCommandBuffer.getDeviceAddress(),
                 shadowTerrainCommandBuffer.getDeviceAddress(), regionCount, (byte) frameId,
                 Minecraft.getInstance().getWindow().getWidth(), Minecraft.getInstance().getWindow().getHeight(),
@@ -668,6 +718,7 @@ public class RenderPipeline {
                     shadowTranslucencyCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE));
         } else {
             lastShadowRegionCount = regionCount;
+            lastShadowSectionCount = sectionCount;
             shadowTerrainTiming.timed(() -> irisShadowPass.draw(programs, IrisTerrainPrograms.Pass.SHADOW, pass, regionCount,
                     shadowTerrainCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE));
         }
@@ -741,6 +792,7 @@ public class RenderPipeline {
             irisShadowPass.delete();
             shadowSceneUniform.delete();
             shadowSectionIndices.delete();
+            shadowSectionVisibility.delete();
             shadowTerrainCommandBuffer.delete();
             shadowTranslucencyCommandBuffer.delete();
             shadowCmdBufferBuilder.delete();
@@ -804,7 +856,8 @@ public class RenderPipeline {
         info.add("CmdBufferBuilder time: " +  String.format("%.03f", cmdBufferBuilder.getTiming().getAverageMs()) + "ms");
         if (shadowCmdBufferBuilder != null) {
             //Only Nvidium's terrain draws in Iris's shadow pass; entities and the pack's shadowcomp passes aren't included
-            info.add("Shadow terrain frame time: " + String.format("%.03f", shadowTerrainTiming.getTiming().getAverageMs()) + "ms (" + lastShadowRegionCount + " regions)");
+            info.add("Shadow terrain frame time: " + String.format("%.03f", shadowTerrainTiming.getTiming().getAverageMs()) + "ms ("
+                    + lastShadowSectionCount + " sections in " + lastShadowRegionCount + " regions)");
             info.add("Shadow translucent frame time: " + String.format("%.03f", shadowTranslucentTiming.getTiming().getAverageMs()) + "ms");
             info.add("Shadow CmdBufferBuilder time: " + String.format("%.03f", shadowCmdBufferBuilder.getTiming().getAverageMs()) + "ms");
         }

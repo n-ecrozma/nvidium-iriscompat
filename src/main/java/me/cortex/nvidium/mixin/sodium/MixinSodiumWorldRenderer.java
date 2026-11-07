@@ -72,6 +72,7 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
 
             // Iris's shadow pass: draw terrain into the shadow map with the pack's shadow programs. This doesn't run a
             // normal Nvidium frame, whose occlusion culling is built from the player's view and reused across frames.
+            // During the shadow pass Iris makes getRenderLists() return Sodium's shadow render list.
             if (IrisCompat.isRenderingShadowPass()) {
                 GlStateManager._disableScissorTest();
                 GlStateManager._disableCull(); // as Iris does for terrain in its shadow pass
@@ -81,9 +82,9 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
                 GlStateManager._depthMask(true);
                 GlStateManager._disableBlend(0);
                 if (pass == DefaultTerrainRenderPasses.SOLID) {
-                    this.getRenderer().renderShadow(pass, shadowViewport, fogParameters, matrices, x, y, z, false);
+                    this.getRenderer().renderShadow(pass, shadowViewport, renderSectionManager.getRenderLists(), fogParameters, matrices, x, y, z, false);
                 } else if (pass == DefaultTerrainRenderPasses.TRANSLUCENT) {
-                    this.getRenderer().renderShadow(pass, shadowViewport, fogParameters, matrices, x, y, z, true);
+                    this.getRenderer().renderShadow(pass, shadowViewport, renderSectionManager.getRenderLists(), fogParameters, matrices, x, y, z, true);
                 }
                 return;
             }

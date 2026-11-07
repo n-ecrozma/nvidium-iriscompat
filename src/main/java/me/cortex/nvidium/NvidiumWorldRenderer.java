@@ -10,6 +10,7 @@ import me.cortex.nvidium.util.DownloadTaskStream;
 import me.cortex.nvidium.util.UploadingBufferStream;
 import net.caffeinemc.mods.sodium.client.SodiumClientMod;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
+import net.caffeinemc.mods.sodium.client.render.chunk.lists.SortedRenderLists;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSection;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.BuilderTaskOutput;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput;
@@ -87,9 +88,9 @@ public class NvidiumWorldRenderer {
     }
 
     /** Draws terrain into Iris's shadow map; see {@link RenderPipeline#renderShadow}. */
-    public void renderShadow(TerrainRenderPass pass, Viewport viewport, FogParameters fogParameters, ChunkRenderMatrices matrices,
-                             double x, double y, double z, boolean translucent) {
-        renderPipeline.renderShadow(pass, viewport, fogParameters, matrices, x, y, z, translucent);
+    public void renderShadow(TerrainRenderPass pass, Viewport viewport, SortedRenderLists shadowLists, FogParameters fogParameters,
+                             ChunkRenderMatrices matrices, double x, double y, double z, boolean translucent) {
+        renderPipeline.renderShadow(pass, viewport, shadowLists, fogParameters, matrices, x, y, z, translucent);
     }
 
     public void renderTranslucent(TerrainRenderPass pass, FrontendRenderPass renderPass, GpuSampler terrainSampler, OitStage stage) {

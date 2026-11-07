@@ -75,10 +75,13 @@ transparency off while a pack is active, so only the ordinary blended path is ne
 draws terrain with the pack's `shadow` programs (from `SHADOW_SODIUM_TERRAIN_CUTOUT` and, when the
 pack renders translucent shadows, `SHADOW_SODIUM_TERRAIN_TRANSLUCENT`).
 
-- No occlusion culling: visibility from the player's view doesn't apply to the sun's. Regions
-  are culled on the CPU against Iris's shadow frustum (which includes the pack's shadow
-  distance), then `shadow_command_buffer_builder.comp` lists every non-empty, non-hidden section
-  of those regions.
+- No occlusion culling: visibility from the player's view doesn't apply to the sun's. Instead
+  Nvidium draws the sections in Sodium's shadow render list, which Iris has Sodium build every
+  frame by testing each section against Iris's shadow frustum (including the pack's shadow
+  distance). They are mapped to Nvidium's section ids on the CPU and uploaded as a visibility
+  mask, and `shadow_command_buffer_builder.comp` turns that into draw lists. Without a list, every
+  section of the regions in the shadow frustum is drawn (the first version's behaviour, which drew
+  all 61 loaded regions with BSL: 2.5 ms of shadow terrain).
 - The shadow task shader is built with `NO_FACE_CULLING`, so faces pointing away from the player
   still cast shadows (Iris turns block face culling off in its shadow pass too).
 - The shadow pass has its own scene data, section lists and command buffers, so the player's
@@ -91,8 +94,6 @@ pack renders translucent shadows, `SHADOW_SODIUM_TERRAIN_TRANSLUCENT`).
 
 ### Known limitations after M4
 
-- Shadow terrain is culled per region, not per section, so some sections outside the shadow
-  frustum are drawn and then clipped by the GPU. Correct, but more work than needed.
 - Solid and cutout terrain share the pack's **cutout** program (Nvidium draws them in one
   pass). Packs whose `gbuffers_terrain_solid` and `gbuffers_terrain_cutout` differ will show
   the cutout version for solid blocks.

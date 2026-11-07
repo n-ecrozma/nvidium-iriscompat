@@ -280,6 +280,11 @@ public class SectionManager {
         }
     }
 
+    /** Nvidium's id for a loaded section (region id * 256 + slot), or -1 if it isn't loaded. */
+    public int getSectionId(int x, int y, int z) {
+        return this.section2id.get(SectionPos.asLong(x, y, z));
+    }
+
     public void deleteSection(RenderSection section) {
         deleteSection(SectionPos.asLong(section.getChunkX(), section.getChunkY(), section.getChunkZ()));
     }
