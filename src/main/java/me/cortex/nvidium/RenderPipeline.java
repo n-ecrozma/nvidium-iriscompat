@@ -78,6 +78,10 @@ public class RenderPipeline {
     private final IDeviceMappedBuffer shadowTerrainCommandBuffer;
     private final IDeviceMappedBuffer shadowTranslucencyCommandBuffer;
     private ShadowCmdBufferBuilder shadowCmdBufferBuilder;
+    //GPU timing of the shadow draws, shown in F3
+    private final Phase shadowTerrainTiming = new Phase() {};
+    private final Phase shadowTranslucentTiming = new Phase() {};
+    private int lastShadowRegionCount;
     private static final int SCENE_SIZE = (int) alignUp(
                     4*4*4 +  // mat4     MVP
                     4*4*4 + // mat4      MVPInv (Optional)
@@ -660,11 +664,12 @@ public class RenderPipeline {
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 
         if (translucent) {
-            irisShadowPass.draw(programs, IrisTerrainPrograms.Pass.SHADOW_TRANSLUCENT, pass, regionCount,
-                    shadowTranslucencyCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE);
+            shadowTranslucentTiming.timed(() -> irisShadowPass.draw(programs, IrisTerrainPrograms.Pass.SHADOW_TRANSLUCENT, pass, regionCount,
+                    shadowTranslucencyCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE));
         } else {
-            irisShadowPass.draw(programs, IrisTerrainPrograms.Pass.SHADOW, pass, regionCount,
-                    shadowTerrainCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE);
+            lastShadowRegionCount = regionCount;
+            shadowTerrainTiming.timed(() -> irisShadowPass.draw(programs, IrisTerrainPrograms.Pass.SHADOW, pass, regionCount,
+                    shadowTerrainCommandBuffer.getDeviceAddress(), shadowSceneUniform.getDeviceAddress(), SCENE_SIZE));
         }
 
         glDisableClientState(GL_UNIFORM_BUFFER_UNIFIED_NV);
@@ -761,6 +766,8 @@ public class RenderPipeline {
         if (statisticsBuffer != null) {
             statisticsBuffer.delete();
         }
+        shadowTerrainTiming.delete();
+        shadowTranslucentTiming.delete();
     }
 
     public void addDebugInfo(List<String> info) {
@@ -795,6 +802,12 @@ public class RenderPipeline {
         info.add("Region Raster time: " +  String.format("%.03f", regionRasterizer.getTiming().getAverageMs()) + "ms");
         info.add("Section Raster time: " +  String.format("%.03f", sectionRasterizer.getTiming().getAverageMs()) + "ms");
         info.add("CmdBufferBuilder time: " +  String.format("%.03f", cmdBufferBuilder.getTiming().getAverageMs()) + "ms");
+        if (shadowCmdBufferBuilder != null) {
+            //Only Nvidium's terrain draws in Iris's shadow pass; entities and the pack's shadowcomp passes aren't included
+            info.add("Shadow terrain frame time: " + String.format("%.03f", shadowTerrainTiming.getTiming().getAverageMs()) + "ms (" + lastShadowRegionCount + " regions)");
+            info.add("Shadow translucent frame time: " + String.format("%.03f", shadowTranslucentTiming.getTiming().getAverageMs()) + "ms");
+            info.add("Shadow CmdBufferBuilder time: " + String.format("%.03f", shadowCmdBufferBuilder.getTiming().getAverageMs()) + "ms");
+        }
         if (Nvidium.config.translucency_sorting_level != TranslucencySortingLevel.NONE) {
             info.add("SectionSorter time: " +  String.format("%.03f", regionSectionSorter.getTiming().getAverageMs()) + "ms");
         }
