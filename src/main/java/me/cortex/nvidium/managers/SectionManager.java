@@ -280,9 +280,14 @@ public class SectionManager {
         }
     }
 
-    /** Nvidium's id for a loaded section (region id * 256 + slot), or -1 if it isn't loaded. */
-    public int getSectionId(int x, int y, int z) {
-        return this.section2id.get(SectionPos.asLong(x, y, z));
+    /**
+     * The GPU slot of a loaded section (region id * 256 + index in the region's section array, as shaders index
+     * sectionData), or -1 if it isn't loaded. Slots move when other sections of the region are removed, so look them
+     * up each frame rather than keeping them.
+     */
+    public int getSectionSlot(int x, int y, int z) {
+        int id = this.section2id.get(SectionPos.asLong(x, y, z));
+        return id == -1 ? -1 : this.regionManager.getSectionSlot(id);
     }
 
     public void deleteSection(RenderSection section) {

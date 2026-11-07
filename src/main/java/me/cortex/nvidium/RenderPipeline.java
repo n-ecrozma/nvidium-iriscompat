@@ -661,7 +661,7 @@ public class RenderPipeline {
                 while (sections.hasNext()) {
                     //Sodium's local section index packing (LocalSectionIndex): x in bits 5-7, y in 0-1, z in 2-4
                     int local = sections.nextByteAsInt();
-                    int id = sectionManager.getSectionId(
+                    int id = sectionManager.getSectionSlot(
                             region.getChunkX() + ((local >> 5) & 7),
                             region.getChunkY() + (local & 3),
                             region.getChunkZ() + ((local >> 2) & 7));

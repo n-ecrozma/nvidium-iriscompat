@@ -213,6 +213,20 @@ public class RegionManager {
         region.verifyIntegrity();
     }
 
+    /**
+     * The GPU slot of a section: region id * 256 + its index in the region's section array, which is what shaders
+     * index sectionData with. Section ids handed out by {@link #allocateSection} are positions instead
+     * (region id * 256 + position in the region), and slots get compacted when sections are removed. -1 if absent.
+     */
+    public int getSectionSlot(int sectionId) {
+        var region = this.regions[sectionId >>> 8];
+        if (region == null) {
+            return -1;
+        }
+        int slot = region.pos2id[sectionId & 0xFF];
+        return slot < 0 ? -1 : (sectionId & ~0xFF) | slot;
+    }
+
     public int allocateSection(int sectionX, int sectionY, int sectionZ) {
         long regionKey = SectionPos.asLong(sectionX >> 3, sectionY >> 2, sectionZ >> 3);
         int regionId = this.regionMap.computeIfAbsent(regionKey, k -> this.idProvider.provide());
