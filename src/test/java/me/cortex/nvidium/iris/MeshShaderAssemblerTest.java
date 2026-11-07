@@ -59,7 +59,8 @@ class MeshShaderAssemblerTest {
 
     @Test
     void sectionSetupAndOutputs() {
-        assertTrue(mesh.contains("iris_RegionOffset = _nv_task.origin + _nv_subchunkOffset.xyz;"));
+        assertTrue(mesh.contains("iris_RegionOffset = _nv_section_origin() + _nv_subchunkOffset.xyz;"));
+        assertTrue(mesh.contains("return _nv_task.origin;"));
         assertTrue(mesh.contains("iris_RegionID = 0u;"));
         assertTrue(mesh.contains("_nv_VertexID = int(vertexIndex);"));
         assertTrue(mesh.contains("flat out vec2 lmcoord[];"));
@@ -89,10 +90,34 @@ class MeshShaderAssemblerTest {
 
     @Test
     void assembledShaderParses() {
+        assertParses(mesh);
+    }
+
+    @Test
+    void translucentTemplate() {
+        var layout = new MeshShaderAssembler.VertexLayout(7, Map.of("mc_Entity", 5, "mc_midTexCoord", 6));
+        String translucent = MeshShaderAssembler.assemble(MeshShaderAssembler.Kind.TRANSLUCENT, stage, layout, 32,
+                java.util.List.of("_NV_SODIUM_SORT"));
+        System.out.println(translucent);
+        assertTrue(translucent.contains("max_vertices = 128, max_primitives = 64"));
+        assertTrue(translucent.contains("#define _NV_SODIUM_SORT"));
+        assertTrue(translucent.contains("return _nv_task.originAndBaseData.xyz;"));
+        assertTrue(translucent.contains("iris_RegionOffset = _nv_section_origin() + _nv_subchunkOffset.xyz;"));
+        assertTrue(translucent.contains("gl_WorkGroupID.x * 32u"));
+        assertTrue(translucent.contains("mc_Entity = uint(_nv_word(5u));"));
+        assertFalse(translucent.contains("\r"));
+        assertParses(translucent);
+
+        String small = MeshShaderAssembler.assemble(MeshShaderAssembler.Kind.TRANSLUCENT, stage, layout, 8, java.util.List.of());
+        assertTrue(small.contains("max_vertices = 32, max_primitives = 16"));
+        assertFalse(small.contains("#define _NV_SODIUM_SORT"));
+    }
+
+    private static void assertParses(String shader) {
         // glsl-transformer's grammar can't parse two NVIDIA-specific constructs that the driver accepts (Nvidium's
         // own shaders use both): pointer declarations, and "taskNV" combined with "in". Swap them for plain GLSL.
-        String withoutPointer = mesh.replace("readonly restrict uint *_nv_terrainData;", "uint _nv_terrainData[64];");
-        assertNotEquals(mesh, withoutPointer, "pointer declaration not found");
+        String withoutPointer = shader.replace("readonly restrict uint *_nv_terrainData;", "uint _nv_terrainData[64];");
+        assertNotEquals(shader, withoutPointer, "pointer declaration not found");
         String parseable = withoutPointer.replace("taskNV in Task", "in Task");
         assertNotEquals(withoutPointer, parseable, "task block not found");
         var transformer = new SingleASTTransformer<>(SingleASTTransformer.IDENTITY_TRANSFORMATION);

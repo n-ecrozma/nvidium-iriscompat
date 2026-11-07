@@ -29,11 +29,11 @@ import java.util.function.Supplier;
 @Mixin(value = IrisRenderingPipeline.class, remap = false)
 public class MixinIrisRenderingPipeline {
     /**
-     * After Iris creates the shader pack's program for Sodium's terrain, build Nvidium's mesh shader versions of it
-     * with exactly the same inputs (framebuffers, uniforms, alpha test, ...).
+     * After Iris creates one of the shader pack's programs for Sodium's terrain, build Nvidium's mesh shader
+     * versions of it with exactly the same inputs (framebuffers, uniforms, alpha test, ...).
      * <p>
      * Nvidium draws solid and cutout terrain in one pass, so it uses the cutout program, whose alpha test is
-     * harmless for solid blocks.
+     * harmless for solid blocks. Translucent terrain uses the translucent (gbuffers_water) program.
      */
     @WrapOperation(
             method = "createShader(Ljava/lang/String;Lnet/irisshaders/iris/pipeline/programs/ShaderKey;Lnet/irisshaders/iris/shaderpack/programs/ProgramSource;Lnet/irisshaders/iris/shaderpack/loading/ProgramId;Lnet/irisshaders/iris/gl/blending/AlphaTest;Lcom/mojang/renderpearl/api/vertex/VertexFormat;Lnet/irisshaders/iris/gl/state/FogMode;ZZZZZLnet/irisshaders/iris/pipeline/transform/Patch;)Lnet/irisshaders/iris/pipeline/programs/ShaderSupplier;",
@@ -53,11 +53,14 @@ public class MixinIrisRenderingPipeline {
                 fallbackAlpha, vertexFormat, inputs, updateNotifier, parent, flipped, fogMode, isIntensity, isFullbright,
                 isShadowPass, isLines, customUniforms, patch);
 
-        if (key == ShaderKey.SODIUM_TERRAIN_CUTOUT && patch == Patch.SODIUM && IrisTerrainPrograms.shouldBuild()) {
+        IrisTerrainPrograms.Group group = key == ShaderKey.SODIUM_TERRAIN_CUTOUT ? IrisTerrainPrograms.Group.OPAQUE
+                : key == ShaderKey.SODIUM_TERRAIN_TRANSLUCENT ? IrisTerrainPrograms.Group.TRANSLUCENT
+                : null;
+        if (group != null && patch == Patch.SODIUM && IrisTerrainPrograms.shouldBuild()) {
             // Sodium keys have no fixed format: Iris uses the pack's terrain format, which it also returns from
             // ChunkMeshFormats.getCurrent()
             int stride = (vertexFormat != null ? vertexFormat : ChunkMeshFormats.getCurrent().getVertexFormat()).getVertexSize();
-            IrisTerrainPrograms.build(parent, stride, pass -> original.call(pipeline, name, key, source, programId,
+            IrisTerrainPrograms.build(parent, group, stride, pass -> original.call(pipeline, name, key, source, programId,
                     beforeTranslucent, afterTranslucent, fallbackAlpha, vertexFormat, inputs, updateNotifier, parent,
                     flipped, fogMode, isIntensity, isFullbright, isShadowPass, isLines, customUniforms, patch));
         }

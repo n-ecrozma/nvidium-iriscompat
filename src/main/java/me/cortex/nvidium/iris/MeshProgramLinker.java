@@ -14,6 +14,7 @@ import org.lwjgl.opengl.NVMeshShader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +42,17 @@ public final class MeshProgramLinker {
                     "the pack's terrain program uses geometry or tessellation shaders, which can't run in a mesh shader");
         }
 
+        var defines = new ArrayList<String>();
+        if (pass.kind == MeshShaderAssembler.Kind.TRANSLUCENT) {
+            switch (Nvidium.config.translucency_sorting_level) {
+                // Quad sorting reorders vertices from inside Nvidium's own translucent mesh shader
+                case QUADS -> throw new MeshShaderAssembler.UnsupportedPackException(
+                        "the \"Quads\" translucency sorting setting isn't supported with shader packs; use \"Sodium\" or \"Sections\"");
+                case SODIUM -> defines.add("_NV_SODIUM_SORT");
+                default -> {}
+            }
+        }
+
         PackVertexStage stage = MeshShaderTransformer.transform(vertex);
         MeshShaderAssembler.VertexLayout layout = layoutOf(vertexFormat);
 
@@ -48,7 +60,7 @@ public final class MeshProgramLinker {
         for (int threads : WORKGROUP_SIZES) {
             String task = ShaderLoader.parse(Identifier.fromNamespaceAndPath("nvidium", pass.taskShader),
                     ShaderDefines.builder().define("MESH_WORKLOAD_PER_INVOCATION", String.valueOf(threads)));
-            String mesh = MeshShaderAssembler.assemble(stage, layout, threads);
+            String mesh = MeshShaderAssembler.assemble(pass.kind, stage, layout, threads, defines);
 
             var sources = new LinkedHashMap<String, String>();
             sources.put("task", task);

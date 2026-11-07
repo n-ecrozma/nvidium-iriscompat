@@ -17,7 +17,6 @@ import java.util.regex.Pattern;
  * generated for the terrain vertex layout. Has no Minecraft or Iris dependencies so it can be unit tested.
  */
 public final class MeshShaderAssembler {
-    private static final String TEMPLATE_PATH = "/assets/nvidium/shaders/terrain/iris/mesh.glsl";
     private static final Pattern MARKER = Pattern.compile("\\$\\{([A-Z_]+)}");
 
     /** Uniform buffer binding for {@code _NvIrisScene}. Iris's fixed bindings use 0 to 6 (see IrisBindings). */
@@ -39,6 +38,24 @@ public final class MeshShaderAssembler {
         }
     }
 
+    /** Which mesh shader template to fill, matching one of Nvidium's terrain task shaders. */
+    public enum Kind {
+        /** Two threads per quad, one triangle each (terrain/task.glsl and temporal_task.glsl). */
+        OPAQUE("/assets/nvidium/shaders/terrain/iris/mesh.glsl", 2, 1),
+        /** One thread per quad, four vertices and two triangles each (terrain/translucent/task.glsl). */
+        TRANSLUCENT("/assets/nvidium/shaders/terrain/iris/translucent_mesh.glsl", 4, 2);
+
+        final String template;
+        final int verticesPerThread;
+        final int primitivesPerThread;
+
+        Kind(String template, int verticesPerThread, int primitivesPerThread) {
+            this.template = template;
+            this.verticesPerThread = verticesPerThread;
+            this.primitivesPerThread = primitivesPerThread;
+        }
+    }
+
     /** Thrown for packs the mesh path can't run; the caller falls back. */
     public static final class UnsupportedPackException extends RuntimeException {
         public UnsupportedPackException(String message) {
@@ -48,19 +65,26 @@ public final class MeshShaderAssembler {
 
     private MeshShaderAssembler() {}
 
-    /**
-     * @param threadsPerGroup mesh workgroup size (two threads per quad); must match the task shader's
-     *                        {@code MESH_WORKLOAD_PER_INVOCATION}
-     */
+    /** Opaque terrain without extra defines; see {@link #assemble(Kind, PackVertexStage, VertexLayout, int, List)}. */
     public static String assemble(PackVertexStage stage, VertexLayout layout, int threadsPerGroup) {
+        return assemble(Kind.OPAQUE, stage, layout, threadsPerGroup, List.of());
+    }
+
+    /**
+     * @param threadsPerGroup mesh workgroup size; must match the task shader's {@code MESH_WORKLOAD_PER_INVOCATION}
+     * @param defines         names to {@code #define} in the generated shader (e.g. {@code _NV_SODIUM_SORT})
+     */
+    public static String assemble(Kind kind, PackVertexStage stage, VertexLayout layout, int threadsPerGroup, List<String> defines) {
         if (threadsPerGroup <= 0 || threadsPerGroup > 32 || threadsPerGroup % 2 != 0) {
             throw new IllegalArgumentException("Mesh workgroup size must be an even number up to 32, got " + threadsPerGroup);
         }
 
         var values = new LinkedHashMap<String, String>();
         values.put("PACK_EXTENSIONS", String.join("\n", stage.extensions()));
+        values.put("DEFINES", String.join("\n", defines.stream().map(name -> "#define " + name).toList()));
         values.put("THREADS", String.valueOf(threadsPerGroup));
-        values.put("MAX_VERTICES", String.valueOf(threadsPerGroup * 2));
+        values.put("MAX_VERTICES", String.valueOf(threadsPerGroup * kind.verticesPerThread));
+        values.put("MAX_PRIMITIVES", String.valueOf(threadsPerGroup * kind.primitivesPerThread));
         values.put("SCENE_BINDING", String.valueOf(SCENE_BINDING));
         values.put("VERTEX_WORDS", String.valueOf(layout.vertexWords()));
         values.put("PACK_BODY", stage.body());
@@ -70,7 +94,7 @@ public final class MeshShaderAssembler {
         values.put("SECTION_SETUP", indent(sectionSetup(stage)));
         values.put("COPY_OUTPUTS", indent(stage.outputCopies()));
 
-        return fill(template(), values);
+        return fill(template(kind.template), values);
     }
 
     /**
@@ -122,7 +146,7 @@ public final class MeshShaderAssembler {
     private static List<String> sectionSetup(PackVertexStage stage) {
         var lines = new ArrayList<String>();
         if (stage.globals().contains("iris_RegionOffset")) {
-            lines.add("iris_RegionOffset = _nv_task.origin + _nv_subchunkOffset.xyz;");
+            lines.add("iris_RegionOffset = _nv_section_origin() + _nv_subchunkOffset.xyz;");
         }
         if (stage.globals().contains("iris_CurrentTime")) {
             lines.add("iris_CurrentTime = 0;");
@@ -160,10 +184,10 @@ public final class MeshShaderAssembler {
         return out.toString();
     }
 
-    private static String template() {
-        try (InputStream in = MeshShaderAssembler.class.getResourceAsStream(TEMPLATE_PATH)) {
+    private static String template(String path) {
+        try (InputStream in = MeshShaderAssembler.class.getResourceAsStream(path)) {
             if (in == null) {
-                throw new IllegalStateException("Missing " + TEMPLATE_PATH);
+                throw new IllegalStateException("Missing " + path);
             }
             // Git on Windows may check the template out with CRLF line endings; keep the output consistent
             return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");

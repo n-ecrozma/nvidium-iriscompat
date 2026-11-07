@@ -13,7 +13,11 @@
 
 #import <nvidium:occlusion/scene.glsl>
 
+// Quads (threads) per mesh shader workgroup. The Iris path can lower it for shader packs whose per-vertex
+// outputs don't fit in a 128-vertex mesh workgroup.
+#ifndef MESH_WORKLOAD_PER_INVOCATION
 #define MESH_WORKLOAD_PER_INVOCATION 32
+#endif
 
 //This is 1 since each task shader workgroup -> multiple meshlets. its not each globalInvocation (afaik)
 layout(local_size_x=1) in;

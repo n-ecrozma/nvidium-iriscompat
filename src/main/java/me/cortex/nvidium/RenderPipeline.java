@@ -398,7 +398,9 @@ public class RenderPipeline {
 
         //Shader pack terrain programs to draw with this frame, if any (otherwise Nvidium's own terrain shaders)
         final IrisTerrainPrograms.Programs irisPrograms = irisTerrainPass != null ? irisTerrainPass.programsForFrame() : null;
+        final boolean irisOpaque = irisPrograms != null && irisPrograms.has(IrisTerrainPrograms.Group.OPAQUE);
         if (irisPrograms != null) {
+            //Also used by the translucent pass later this frame
             Vector3f cameraOffset = new Vector3f((float) (px-(chunkPos.x<<4)), (float) (py-(chunkPos.y<<4)), (float) (pz-(chunkPos.z<<4))).negate();
             irisTerrainPass.upload(uploadStream, crm, fogParameters, cameraOffset,
                     sectionManager.terrainAreana.buffer.getDeviceAddress(),
@@ -426,7 +428,7 @@ public class RenderPipeline {
 
         if (prevRegionCount != 0) {
             glEnable(GL_DEPTH_TEST);
-            if (irisPrograms != null) {
+            if (irisOpaque) {
                 final int regionCount = prevRegionCount;
                 terrainRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.PRIMARY, pass,
                         regionCount, terrainCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
@@ -493,7 +495,7 @@ public class RenderPipeline {
         //Do temporal rasterization
         if (Nvidium.config.enable_temporal_coherence) {
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
-            if (irisPrograms != null) {
+            if (irisOpaque) {
                 final int regionCount = visibleRegions;
                 temporalRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.TEMPORAL, pass,
                         regionCount, temporalCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
@@ -558,7 +560,17 @@ public class RenderPipeline {
         //Translucency sorting
         {
             glEnable(GL_DEPTH_TEST);
-            translucencyTerrainRasterizer.raster(pass, renderPass, prevRegionCount, translucencyCommandBuffer.getDeviceAddress(), terrainSampler, stage);
+            //Shader packs draw translucent terrain with their water program. Iris turns Minecraft's order independent
+            // transparency off while a pack is active, so stage is null then.
+            final IrisTerrainPrograms.Programs irisPrograms = irisTerrainPass != null ? irisTerrainPass.programsForFrame() : null;
+            if (stage == null && irisPrograms != null && irisPrograms.has(IrisTerrainPrograms.Group.TRANSLUCENT)) {
+                final int regionCount = prevRegionCount;
+                translucencyTerrainRasterizer.timed(() -> irisTerrainPass.drawTranslucent(irisPrograms, pass, regionCount,
+                        translucencyCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
+                glBufferAddressRangeNV(GL_UNIFORM_BUFFER_ADDRESS_NV, 0, sceneUniform.getDeviceAddress(), SCENE_SIZE);
+            } else {
+                translucencyTerrainRasterizer.raster(pass, renderPass, prevRegionCount, translucencyCommandBuffer.getDeviceAddress(), terrainSampler, stage);
+            }
         }
 
         glDisableClientState(GL_UNIFORM_BUFFER_UNIFIED_NV);
@@ -621,7 +633,7 @@ public class RenderPipeline {
 
     public void addDebugInfo(List<String> info) {
         if (irisTerrainPass != null) {
-            info.add(irisTerrainPass.debugStatus());
+            irisTerrainPass.addDebugInfo(info);
         }
         if (Nvidium.config.statistics_level != StatisticsLoggingLevel.NONE) {
             StringBuilder builder = new StringBuilder();

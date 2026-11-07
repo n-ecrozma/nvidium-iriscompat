@@ -10,10 +10,11 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 ${PACK_EXTENSIONS}
+${DEFINES}
 
 // Two threads per quad, each emitting one triangle
 layout(local_size_x = ${THREADS}) in;
-layout(triangles, max_vertices = ${MAX_VERTICES}, max_primitives = ${THREADS}) out;
+layout(triangles, max_vertices = ${MAX_VERTICES}, max_primitives = ${MAX_PRIMITIVES}) out;
 
 // Written by Nvidium's terrain task shaders (terrain/task_common2.glsl). The block name and members must match.
 taskNV in Task {
@@ -23,6 +24,11 @@ taskNV in Task {
     uint quadCount;
     uint transformationId;
 } _nv_task;
+
+// Position of the section being drawn, relative to the chunk the camera is in
+vec3 _nv_section_origin() {
+    return _nv_task.origin;
+}
 
 layout(std140, binding = ${SCENE_BINDING}) uniform _NvIrisScene {
     // Camera position within its chunk, negated: added to a section's origin to make it camera-relative

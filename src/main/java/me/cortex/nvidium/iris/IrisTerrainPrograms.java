@@ -7,7 +7,6 @@ import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.pipeline.programs.ExtendedShader;
 import net.irisshaders.iris.pipeline.programs.ShaderSupplier;
-
 import org.lwjgl.opengl.GL31C;
 
 import java.util.EnumMap;
@@ -18,24 +17,43 @@ import java.util.function.Function;
 /**
  * Shader pack terrain programs built for Nvidium, one set per Iris pipeline.
  * <p>
- * When Iris creates the program for Sodium's terrain ({@code SODIUM_TERRAIN_CUTOUT}), the mixin in
- * {@code MixinIrisRenderingPipeline} asks Iris to create it again for each Nvidium pass, with
- * {@link #currentRequest()} set so that {@code MixinShaderCreator} links Nvidium's task and mesh shaders instead of
- * the vertex shader. The result is a regular Iris {@link ExtendedShader}, which sets up the pack's uniforms,
- * samplers, framebuffer and blending exactly as it does for Sodium.
+ * When Iris creates the pack's programs for Sodium's terrain, the mixin in {@code MixinIrisRenderingPipeline} asks
+ * Iris to create each one again for the matching Nvidium passes, with {@link #currentRequest()} set so that
+ * {@code MixinShaderCreator} links Nvidium's task and mesh shaders instead of the vertex shader. The result is a
+ * regular Iris {@link ExtendedShader}, which sets up the pack's uniforms, samplers, framebuffer and blending exactly
+ * as it does for Sodium.
  * <p>
  * Only touch this class when Iris is installed. Render thread only.
  */
 public final class IrisTerrainPrograms {
+    /** Passes that are built from the same Iris program and are used together (or not at all). */
+    public enum Group {
+        /** Solid and cutout terrain, from {@code SODIUM_TERRAIN_CUTOUT} (Nvidium draws both in one pass). */
+        OPAQUE("terrain"),
+        /** Translucent terrain such as water, from {@code SODIUM_TERRAIN_TRANSLUCENT} (gbuffers_water). */
+        TRANSLUCENT("water");
+
+        public final String label;
+
+        Group(String label) {
+            this.label = label;
+        }
+    }
+
     /** The Nvidium passes that draw terrain; each needs its own program because the task shader differs. */
     public enum Pass {
-        PRIMARY("terrain/task.glsl"),
-        TEMPORAL("terrain/temporal_task.glsl");
+        PRIMARY(Group.OPAQUE, "terrain/task.glsl", MeshShaderAssembler.Kind.OPAQUE),
+        TEMPORAL(Group.OPAQUE, "terrain/temporal_task.glsl", MeshShaderAssembler.Kind.OPAQUE),
+        TRANSLUCENT(Group.TRANSLUCENT, "terrain/translucent/task.glsl", MeshShaderAssembler.Kind.TRANSLUCENT);
 
+        public final Group group;
         final String taskShader;
+        final MeshShaderAssembler.Kind kind;
 
-        Pass(String taskShader) {
+        Pass(Group group, String taskShader, MeshShaderAssembler.Kind kind) {
+            this.group = group;
             this.taskShader = taskShader;
+            this.kind = kind;
         }
     }
 
@@ -46,47 +64,53 @@ public final class IrisTerrainPrograms {
     public static final int SCENE_DATA_BINDING = 8;
 
     /**
-     * Nvidium settings baked into the task shader: fog changes the layout of {@code SceneData}, and statistics add
-     * writes to a buffer that only exists when they are enabled.
+     * Nvidium settings baked into the programs: fog changes the layout of {@code SceneData}, statistics add writes
+     * to the task shaders, and the translucency sorting level changes the translucent task and mesh shaders.
      */
-    public record TaskShaderSettings(boolean renderFog, int statisticsLevel) {
+    public record TaskShaderSettings(boolean renderFog, int statisticsLevel, int translucencySorting) {
         public static TaskShaderSettings current() {
-            return new TaskShaderSettings(Nvidium.config.render_fog, Nvidium.config.statistics_level.ordinal());
+            return new TaskShaderSettings(Nvidium.config.render_fog, Nvidium.config.statistics_level.ordinal(),
+                    Nvidium.config.translucency_sorting_level.ordinal());
         }
     }
 
-    /** Built programs, or why they couldn't be built. */
+    /** The programs built for one pipeline, and why any group couldn't be built. */
     public static final class Programs {
-        private final Map<Pass, ExtendedShader> programs;
+        private final Map<Pass, ExtendedShader> programs = new EnumMap<>(Pass.class);
+        private final Map<Group, String> failures = new EnumMap<>(Group.class);
         private final int vertexStride;
         private final TaskShaderSettings settings;
-        private final String failure;
 
-        private Programs(Map<Pass, ExtendedShader> programs, int vertexStride, TaskShaderSettings settings, String failure) {
-            this.programs = programs;
+        private Programs(int vertexStride, TaskShaderSettings settings) {
             this.vertexStride = vertexStride;
             this.settings = settings;
-            this.failure = failure;
         }
 
         public TaskShaderSettings settings() {
             return settings;
         }
 
-        public ExtendedShader get(Pass pass) {
-            return programs.get(pass);
-        }
-
         public int vertexStride() {
             return vertexStride;
         }
 
-        public String failure() {
-            return failure;
+        public ExtendedShader get(Pass pass) {
+            return programs.get(pass);
         }
 
-        public boolean isUsable() {
-            return failure == null;
+        /** Whether every pass of the group was built. */
+        public boolean has(Group group) {
+            for (Pass pass : Pass.values()) {
+                if (pass.group == group && !programs.containsKey(pass)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** Why the group couldn't be built, or null if it was built or never attempted. */
+        public String failure(Group group) {
+            return failures.get(group);
         }
 
         private void close() {
@@ -111,17 +135,27 @@ public final class IrisTerrainPrograms {
     }
 
     /**
-     * Builds Nvidium's programs for a pipeline.
+     * Builds the passes of one group for a pipeline. Each group is built from its own Iris program, at the moment
+     * Iris creates that program; a failed group doesn't affect the others.
      *
-     * @param createAgain runs Iris's program creation again for the given pass
-     * @param vertexStride vertex size the programs were built for
+     * @param vertexStride vertex size the programs are built for
+     * @param createAgain  runs Iris's program creation again for the given pass
      */
-    public static void build(IrisRenderingPipeline pipeline, int vertexStride, Function<Pass, ShaderSupplier> createAgain) {
-        release(pipeline);
+    public static void build(IrisRenderingPipeline pipeline, Group group, int vertexStride, Function<Pass, ShaderSupplier> createAgain) {
         var settings = TaskShaderSettings.current();
+        Programs programs = BY_PIPELINE.get(pipeline);
+        if (programs == null || programs.vertexStride != vertexStride || !programs.settings.equals(settings)) {
+            release(pipeline);
+            programs = new Programs(vertexStride, settings);
+            BY_PIPELINE.put(pipeline, programs);
+        }
+
         var built = new EnumMap<Pass, ExtendedShader>(Pass.class);
         try {
             for (Pass pass : Pass.values()) {
+                if (pass.group != group) {
+                    continue;
+                }
                 ShaderSupplier supplier;
                 BUILDING.set(pass);
                 try {
@@ -131,7 +165,7 @@ public final class IrisTerrainPrograms {
                 }
                 // Create the ExtendedShader now so that problems surface at pack load, not mid-frame
                 if (!(supplier.shader().get() instanceof ExtendedShader shader)) {
-                    throw new IllegalStateException("Iris did not create an ExtendedShader for the terrain program");
+                    throw new IllegalStateException("Iris did not create an ExtendedShader for the " + group.label + " program");
                 }
                 built.put(pass, shader);
                 // Creating the ExtendedShader applied Iris's fixed bindings; move Nvidium's block off u_Globals' slot
@@ -141,13 +175,15 @@ public final class IrisTerrainPrograms {
                 }
                 GL31C.glUniformBlockBinding(shader.getProgramId(), sceneData, SCENE_DATA_BINDING);
             }
-            BY_PIPELINE.put(pipeline, new Programs(built, vertexStride, settings, null));
-            Nvidium.LOGGER.info("Nvidium: built shader pack terrain programs ({} bytes per vertex)", vertexStride);
+            programs.programs.putAll(built);
+            programs.failures.remove(group);
+            Nvidium.LOGGER.info("Nvidium: built shader pack {} programs ({} bytes per vertex)", group.label, vertexStride);
         } catch (Throwable t) {
             built.values().forEach(GlProgram::close);
             String reason = t.getMessage() != null ? t.getMessage() : t.toString();
-            BY_PIPELINE.put(pipeline, new Programs(new EnumMap<>(Pass.class), vertexStride, settings, reason));
-            Nvidium.LOGGER.error("Nvidium: could not run this shader pack's terrain shaders, terrain will use Nvidium's own shaders", t);
+            programs.failures.put(group, reason);
+            Nvidium.LOGGER.error("Nvidium: could not run this shader pack's {} shaders, Nvidium's own shaders will be used for it",
+                    group.label, t);
         }
     }
 

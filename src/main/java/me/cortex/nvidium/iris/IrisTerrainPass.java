@@ -81,22 +81,15 @@ public final class IrisTerrainPass {
     }
 
     /**
-     * The pack programs to draw this frame with, or null to use Nvidium's own terrain shaders.
+     * The pack programs to draw this frame with, or null to use Nvidium's own terrain shaders for everything.
+     * Check {@link IrisTerrainPrograms.Programs#has} for each group before using it.
      */
     public IrisTerrainPrograms.Programs programsForFrame() {
         var programs = IrisTerrainPrograms.current();
         if (programs == null) {
             return null;
         }
-        String problem = null;
-        if (!programs.isUsable()) {
-            problem = programs.failure();
-        } else if (programs.vertexStride() != TerrainVertexLayout.current().stride) {
-            problem = "they were built for " + programs.vertexStride() + "-byte vertices but terrain uses "
-                    + TerrainVertexLayout.current().stride + " (reload the world or the shader pack)";
-        } else if (!programs.settings().equals(IrisTerrainPrograms.TaskShaderSettings.current())) {
-            problem = "Nvidium's fog or statistics setting changed since the shader pack was loaded (reload the shader pack)";
-        }
+        String problem = mismatch(programs);
         if (problem != null) {
             if (warnedAbout != programs) {
                 warnedAbout = programs;
@@ -107,18 +100,41 @@ public final class IrisTerrainPass {
         return programs;
     }
 
-    /** One line for the F3 screen saying which terrain shaders are in use. */
-    public String debugStatus() {
+    private static String mismatch(IrisTerrainPrograms.Programs programs) {
+        if (programs.vertexStride() != TerrainVertexLayout.current().stride) {
+            return "they were built for " + programs.vertexStride() + "-byte vertices but terrain uses "
+                    + TerrainVertexLayout.current().stride + " (reload the world or the shader pack)";
+        }
+        if (!programs.settings().equals(IrisTerrainPrograms.TaskShaderSettings.current())) {
+            return "Nvidium's fog, statistics or translucency sorting setting changed since the shader pack was loaded (reload the shader pack)";
+        }
+        return null;
+    }
+
+    /** Lines for the F3 screen saying which shaders draw terrain and water. */
+    public void addDebugInfo(List<String> info) {
         var programs = IrisTerrainPrograms.current();
         if (programs == null) {
-            return "Shader pack terrain: not built (enable Iris support and reload the shader pack)";
+            info.add("Shader pack terrain: not built (enable Iris support and reload the shader pack)");
+            return;
         }
-        if (programsForFrame() != null) {
-            return "Shader pack terrain: pack shaders (" + programs.vertexStride() + " B/vertex)";
+        String mismatch = mismatch(programs);
+        for (var group : IrisTerrainPrograms.Group.values()) {
+            String status;
+            if (mismatch != null) {
+                status = "Nvidium shaders (settings changed, reload the shader pack)";
+            } else if (programs.has(group)) {
+                status = "pack shaders (" + programs.vertexStride() + " B/vertex)";
+            } else {
+                String reason = programs.failure(group);
+                if (reason == null) {
+                    reason = "pack has no program for it";
+                }
+                int newline = reason.indexOf('\n');
+                status = "Nvidium shaders (" + (newline >= 0 ? reason.substring(0, newline) : reason) + ")";
+            }
+            info.add("Shader pack " + group.label + ": " + status);
         }
-        String reason = programs.isUsable() ? "settings changed, reload the shader pack" : programs.failure();
-        int newline = reason.indexOf('\n');
-        return "Shader pack terrain: Nvidium shaders (" + (newline >= 0 ? reason.substring(0, newline) : reason) + ")";
     }
 
     /**
@@ -157,6 +173,17 @@ public final class IrisTerrainPass {
         MemoryUtil.memPutFloat(ptr + 12, 0.0f);
         MemoryUtil.memPutLong(ptr + 16, terrainAddress);
         MemoryUtil.memPutLong(ptr + 24, 0);
+    }
+
+    /**
+     * Draws translucent terrain with the pack's water program. Sets vanilla's translucent blending first, the
+     * pipeline state Iris expects for this program; the pack's own blend overrides are applied on top by Iris.
+     */
+    public void drawTranslucent(IrisTerrainPrograms.Programs programs, TerrainRenderPass pass, int regionCount,
+                                long commandAddress, long sceneDataAddress, long sceneDataSize) {
+        GlStateManager._enableBlend(0);
+        GlStateManager._blendFuncSeparate(GL33C.GL_SRC_ALPHA, GL33C.GL_ONE_MINUS_SRC_ALPHA, GL33C.GL_ONE, GL33C.GL_ONE_MINUS_SRC_ALPHA);
+        draw(programs, IrisTerrainPrograms.Pass.TRANSLUCENT, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize);
     }
 
     /** Draws terrain for one of Nvidium's passes; see {@link #draw(ExtendedShader, TerrainRenderPass, int, long, long, long)}. */

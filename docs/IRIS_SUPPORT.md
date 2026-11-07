@@ -9,10 +9,10 @@ automatically into mesh-shader programs, so packs work without hand edits.
   `IrisShaders/Iris` branch `26.3`, commit `671a5c8`).
 - Work branch: `iris-compat`.
 
-Status: **M1 tested in game** (Nvidium stays on with a pack and places terrain correctly; terrain
-had no pack shading, as expected). **M2 implemented, not yet tested in game**: compiles, and
-16 unit tests pass (shader rewriting, mesh shader assembly and syntax, and the mixin targets
-checked against the Iris jar).
+Status: **M1 and M2 tested in game** (RTX 4060 Ti, BlackHole pack): opaque terrain is drawn
+by Nvidium with the pack's shaders, F3 reports `pack shaders (36 B/vertex)`, about 170 fps.
+Water was missing, as expected before M3. **M3 implemented, not yet tested in game**:
+compiles, and 18 unit tests pass.
 
 ### Milestone log
 
@@ -55,20 +55,38 @@ per-vertex outputs exceed the mesh shader output limit, the linker retries with 
 threads per workgroup. Sources of a program that fails are written to `nvidium-iris-debug/` in
 the game folder; start the game with `-Dnvidium.isDebug=TRUE` to write them for every program.
 
-### Known limitations after M2
+**M3, water and other translucent terrain through the pack's `gbuffers_water`.** The hook
+also builds a program from Iris's `SODIUM_TERRAIN_TRANSLUCENT`, linked with Nvidium's
+translucent task shader and a second template, `shaders/terrain/iris/translucent_mesh.glsl`
+(one thread per quad, emitting its 4 vertices in Sodium's sorted order). It is drawn in
+Nvidium's translucent pass with vanilla's translucent blending, plus any blend overrides the
+pack sets. Terrain and water are built and fall back separately; F3 shows one line for each
+(`Shader pack terrain: ...`, `Shader pack water: ...`). Iris turns Minecraft's order-independent
+transparency off while a pack is active, so only the ordinary blended path is needed.
+
+### Known limitations after M3
 
 - Solid and cutout terrain share the pack's **cutout** program (Nvidium draws them in one
   pass). Packs whose `gbuffers_terrain_solid` and `gbuffers_terrain_cutout` differ will show
   the cutout version for solid blocks.
-- **Water and other translucent blocks** still use Nvidium's own shader (M3).
+- The **"Quads" translucency sorting** setting isn't supported with shader packs (it reorders
+  vertices inside Nvidium's own translucent shader). With it selected, water falls back to
+  Nvidium's shader and F3 says why; use "Sodium" (the default) or "Sections".
 - **No terrain shadows** (M4).
 - Chunk fade-in is disabled (`mc_chunkFade` is always 1).
 - Region transforms set through `NvidiumAPI` are ignored for pack-shaded terrain.
 - `gl_ClipDistance`/`gl_CullDistance` written by a pack's vertex shader are not forwarded.
-- Changing Nvidium's fog or statistics option needs a shader pack reload (F3+R) before the
-  pack programs are used again; until then terrain uses Nvidium's shaders.
+- Changing Nvidium's fog, statistics or translucency sorting option needs a shader pack reload
+  (F3+R) before the pack programs are used again; until then terrain uses Nvidium's shaders.
 - Pinned to Iris 1.11.6 internals. `IrisMixinTargetsTest` fails the build if a hooked
   method changes.
+
+### What to check when testing M3
+
+1. F3 shows `Shader pack water: pack shaders (...)` next to the terrain line.
+2. Water, stained glass and ice are drawn with the pack's water effects (waves, reflections,
+   tint), blend correctly with what's behind them, and stay sorted correctly when you move.
+3. Looking from underwater up, and through glass at water, still works.
 
 ### What to check when testing M2
 
