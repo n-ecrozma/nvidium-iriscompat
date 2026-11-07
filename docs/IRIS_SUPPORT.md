@@ -9,10 +9,11 @@ automatically into mesh-shader programs, so packs work without hand edits.
   `IrisShaders/Iris` branch `26.3`, commit `671a5c8`).
 - Work branch: `iris-compat`.
 
-Status: **M1 and M2 tested in game** (RTX 4060 Ti, BlackHole pack): opaque terrain is drawn
-by Nvidium with the pack's shaders, F3 reports `pack shaders (36 B/vertex)`, about 170 fps.
-Water was missing, as expected before M3. **M3 implemented, not yet tested in game**:
-compiles, and 18 unit tests pass.
+Status: **M1 to M3 tested in game** (RTX 4060 Ti, BlackHole pack). Terrain and water are drawn
+by Nvidium with the pack's shaders; F3 reports `pack shaders (36 B/vertex)` for both, and water
+shows the pack's reflections. About 150-170 fps. Open question: the translucent pass took about
+3.5 ms against 0.2 ms for opaque terrain. Likely mostly the pack's water fragment shader
+(reflections), which Sodium would pay too; not yet compared against plain Sodium. Next: M4 (shadows).
 
 ### Milestone log
 
