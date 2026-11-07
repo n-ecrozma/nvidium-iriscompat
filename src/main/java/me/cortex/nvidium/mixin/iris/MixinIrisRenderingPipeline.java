@@ -15,6 +15,7 @@ import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.pipeline.programs.ShaderKey;
 import net.irisshaders.iris.pipeline.programs.ShaderSupplier;
 import net.irisshaders.iris.pipeline.transform.Patch;
+import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.shaderpack.loading.ProgramId;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import net.irisshaders.iris.uniforms.FrameUpdateNotifier;
@@ -63,6 +64,40 @@ public class MixinIrisRenderingPipeline {
             IrisTerrainPrograms.build(parent, group, stride, pass -> original.call(pipeline, name, key, source, programId,
                     beforeTranslucent, afterTranslucent, fallbackAlpha, vertexFormat, inputs, updateNotifier, parent,
                     flipped, fogMode, isIntensity, isFullbright, isShadowPass, isLines, customUniforms, patch));
+        }
+        return result;
+    }
+
+    /**
+     * Same for the shadow pass: after Iris creates the pack's shadow program for Sodium's terrain, build Nvidium's
+     * versions of it. They are only linked here; see IrisTerrainPrograms.Group#lazy.
+     */
+    @WrapOperation(
+            method = "createShadowShader(Ljava/lang/String;Lnet/irisshaders/iris/pipeline/programs/ShaderKey;Lnet/irisshaders/iris/shaderpack/programs/ProgramSource;Lnet/irisshaders/iris/shaderpack/loading/ProgramId;Lnet/irisshaders/iris/gl/blending/AlphaTest;Lcom/mojang/renderpearl/api/vertex/VertexFormat;ZZZZLnet/irisshaders/iris/pipeline/transform/Patch;)Lnet/irisshaders/iris/pipeline/programs/ShaderSupplier;",
+            at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/programs/ShaderCreator;createShadow(Lnet/irisshaders/iris/pipeline/WorldRenderingPipeline;Ljava/lang/String;Lnet/irisshaders/iris/pipeline/programs/ShaderKey;Lnet/irisshaders/iris/shaderpack/programs/ProgramSource;Lnet/irisshaders/iris/shaderpack/loading/ProgramId;Ljava/util/function/Supplier;Lnet/irisshaders/iris/gl/blending/AlphaTest;Lcom/mojang/renderpearl/api/vertex/VertexFormat;Lnet/irisshaders/iris/gl/state/ShaderAttributeInputs;Lnet/irisshaders/iris/uniforms/FrameUpdateNotifier;Lnet/irisshaders/iris/pipeline/IrisRenderingPipeline;Ljava/util/function/Supplier;Lnet/irisshaders/iris/gl/state/FogMode;ZZZZLnet/irisshaders/iris/uniforms/custom/CustomUniforms;Lnet/irisshaders/iris/pipeline/transform/Patch;)Lnet/irisshaders/iris/pipeline/programs/ShaderSupplier;")
+    )
+    private ShaderSupplier nvidium$buildShadowTerrainPrograms(WorldRenderingPipeline pipeline, String name, ShaderKey key,
+                                                               ProgramSource source, ProgramId programId,
+                                                               Supplier<ShadowRenderTargets> shadowTargets,
+                                                               AlphaTest fallbackAlpha, VertexFormat vertexFormat,
+                                                               ShaderAttributeInputs inputs, FrameUpdateNotifier updateNotifier,
+                                                               IrisRenderingPipeline parent, Supplier<ImmutableSet<Integer>> flipped,
+                                                               FogMode fogMode, boolean isIntensity, boolean isFullbright,
+                                                               boolean isShadowPass, boolean isLines,
+                                                               CustomUniforms customUniforms, Patch patch,
+                                                               Operation<ShaderSupplier> original) {
+        ShaderSupplier result = original.call(pipeline, name, key, source, programId, shadowTargets, fallbackAlpha,
+                vertexFormat, inputs, updateNotifier, parent, flipped, fogMode, isIntensity, isFullbright, isShadowPass,
+                isLines, customUniforms, patch);
+
+        IrisTerrainPrograms.Group group = key == ShaderKey.SHADOW_SODIUM_TERRAIN_CUTOUT ? IrisTerrainPrograms.Group.SHADOW_OPAQUE
+                : key == ShaderKey.SHADOW_SODIUM_TERRAIN_TRANSLUCENT ? IrisTerrainPrograms.Group.SHADOW_TRANSLUCENT
+                : null;
+        if (group != null && patch == Patch.SODIUM && IrisTerrainPrograms.shouldBuild()) {
+            int stride = (vertexFormat != null ? vertexFormat : ChunkMeshFormats.getCurrent().getVertexFormat()).getVertexSize();
+            IrisTerrainPrograms.build(parent, group, stride, pass -> original.call(pipeline, name, key, source, programId,
+                    shadowTargets, fallbackAlpha, vertexFormat, inputs, updateNotifier, parent, flipped, fogMode,
+                    isIntensity, isFullbright, isShadowPass, isLines, customUniforms, patch));
         }
         return result;
     }

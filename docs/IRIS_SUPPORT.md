@@ -13,7 +13,8 @@ Status: **M1 to M3 tested in game** (RTX 4060 Ti, BlackHole pack). Terrain and w
 by Nvidium with the pack's shaders; F3 reports `pack shaders (36 B/vertex)` for both, and water
 shows the pack's reflections. About 150-170 fps. Open question: the translucent pass took about
 3.5 ms against 0.2 ms for opaque terrain. Likely mostly the pack's water fragment shader
-(reflections), which Sodium would pay too; not yet compared against plain Sodium. Next: M4 (shadows).
+(reflections), which Sodium would pay too; not yet compared against plain Sodium.
+**M4 (shadows) implemented, not yet tested in game**: compiles, and 18 unit tests pass.
 
 ### Milestone log
 
@@ -65,15 +66,34 @@ pack sets. Terrain and water are built and fall back separately; F3 shows one li
 (`Shader pack terrain: ...`, `Shader pack water: ...`). Iris turns Minecraft's order-independent
 transparency off while a pack is active, so only the ordinary blended path is needed.
 
-### Known limitations after M3
+**M4, terrain in the shadow map.** In Iris's shadow pass Nvidium no longer draws nothing: it
+draws terrain with the pack's `shadow` programs (from `SHADOW_SODIUM_TERRAIN_CUTOUT` and, when the
+pack renders translucent shadows, `SHADOW_SODIUM_TERRAIN_TRANSLUCENT`).
 
+- No occlusion culling: visibility from the player's view doesn't apply to the sun's. Regions
+  are culled on the CPU against Iris's shadow frustum (which includes the pack's shadow
+  distance), then `shadow_command_buffer_builder.comp` lists every non-empty, non-hidden section
+  of those regions.
+- The shadow task shader is built with `NO_FACE_CULLING`, so faces pointing away from the player
+  still cast shadows (Iris turns block face culling off in its shadow pass too).
+- The shadow pass has its own scene data, section lists and command buffers, so the player's
+  frame data and occlusion state are untouched. They are only allocated while a pack is active.
+- Shadow programs are linked when the pack loads (so shader errors show up early) but only wrapped
+  in Iris's `ExtendedShader` on first use in a shadow pass. Creating one earlier would create
+  Iris's shadow render targets and could turn on a shadow pass for packs that have none.
+- Drawn with face culling off and a forward-Z depth test, matching Iris's shadow pass.
+- F3 shows `Shader pack shadow terrain: ...` and `Shader pack shadow water: ...`.
+
+### Known limitations after M4
+
+- Shadow terrain is culled per region, not per section, so some sections outside the shadow
+  frustum are drawn and then clipped by the GPU. Correct, but more work than needed.
 - Solid and cutout terrain share the pack's **cutout** program (Nvidium draws them in one
   pass). Packs whose `gbuffers_terrain_solid` and `gbuffers_terrain_cutout` differ will show
   the cutout version for solid blocks.
 - The **"Quads" translucency sorting** setting isn't supported with shader packs (it reorders
   vertices inside Nvidium's own translucent shader). With it selected, water falls back to
   Nvidium's shader and F3 says why; use "Sodium" (the default) or "Sections".
-- **No terrain shadows** (M4).
 - Chunk fade-in is disabled (`mc_chunkFade` is always 1).
 - Region transforms set through `NvidiumAPI` are ignored for pack-shaded terrain.
 - `gl_ClipDistance`/`gl_CullDistance` written by a pack's vertex shader are not forwarded.
@@ -81,6 +101,15 @@ transparency off while a pack is active, so only the ordinary blended path is ne
   (F3+R) before the pack programs are used again; until then terrain uses Nvidium's shaders.
 - Pinned to Iris 1.11.6 internals. `IrisMixinTargetsTest` fails the build if a hooked
   method changes.
+
+### What to check when testing M4
+
+1. F3 shows `Shader pack shadow terrain: pack shaders (...)`, and Iris's `Shadows: C: N/...` line
+   shows a non-zero count.
+2. Terrain casts shadows: trees and hills on the ground, overhangs, and caves stay dark.
+3. Shadows stay put when you turn around: terrain behind you still casts shadows into view.
+4. With a pack that has coloured or translucent shadows, stained glass and water cast them.
+5. Compare fps with shadows on and off in the pack's settings.
 
 ### What to check when testing M3
 

@@ -58,8 +58,9 @@ public final class MeshProgramLinker {
 
         String lastError = null;
         for (int threads : WORKGROUP_SIZES) {
-            String task = ShaderLoader.parse(Identifier.fromNamespaceAndPath("nvidium", pass.taskShader),
-                    ShaderDefines.builder().define("MESH_WORKLOAD_PER_INVOCATION", String.valueOf(threads)));
+            var taskDefines = ShaderDefines.builder().define("MESH_WORKLOAD_PER_INVOCATION", String.valueOf(threads));
+            pass.taskDefines.forEach(taskDefines::define);
+            String task = ShaderLoader.parse(Identifier.fromNamespaceAndPath("nvidium", pass.taskShader), taskDefines);
             String mesh = MeshShaderAssembler.assemble(pass.kind, stage, layout, threads, defines);
 
             var sources = new LinkedHashMap<String, String>();

@@ -86,6 +86,12 @@ public class NvidiumWorldRenderer {
         }
     }
 
+    /** Draws terrain into Iris's shadow map; see {@link RenderPipeline#renderShadow}. */
+    public void renderShadow(TerrainRenderPass pass, Viewport viewport, FogParameters fogParameters, ChunkRenderMatrices matrices,
+                             double x, double y, double z, boolean translucent) {
+        renderPipeline.renderShadow(pass, viewport, fogParameters, matrices, x, y, z, translucent);
+    }
+
     public void renderTranslucent(TerrainRenderPass pass, FrontendRenderPass renderPass, GpuSampler terrainSampler, OitStage stage) {
         this.renderPipeline.renderTranslucent(pass, renderPass, terrainSampler, stage);
     }

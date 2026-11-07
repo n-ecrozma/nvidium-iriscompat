@@ -189,7 +189,11 @@ public final class IrisTerrainPass {
     /** Draws terrain for one of Nvidium's passes; see {@link #draw(ExtendedShader, TerrainRenderPass, int, long, long, long)}. */
     public void draw(IrisTerrainPrograms.Programs programs, IrisTerrainPrograms.Pass nvidiumPass, TerrainRenderPass pass,
                      int regionCount, long commandAddress, long sceneDataAddress, long sceneDataSize) {
-        draw(programs.get(nvidiumPass), pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize);
+        ExtendedShader program = programs.get(nvidiumPass);
+        if (program == null) {
+            return; // a lazy program that failed to set up; the failure is logged and shown in F3
+        }
+        draw(program, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize);
     }
 
     /**

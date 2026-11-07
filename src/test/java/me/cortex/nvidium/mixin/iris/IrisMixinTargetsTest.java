@@ -55,8 +55,10 @@ class IrisMixinTargetsTest {
                             AnnotationNode atNode = (AnnotationNode) at;
                             if ("INVOKE".equals(value(atNode, "value"))) {
                                 String call = (String) value(atNode, "target");
-                                assertTrue(methods.stream().anyMatch(m -> calls(m, call)),
-                                        where + ": no call to " + call + " in the selected method(s) of " + target);
+                                // Each targeted method must contain the call, or that method silently goes unhooked
+                                for (MethodNode method : methods) {
+                                    assertTrue(calls(method, call), where + ": no call to " + call + " in " + target + "." + method.name);
+                                }
                             }
                         }
                         checked++;
@@ -64,7 +66,7 @@ class IrisMixinTargetsTest {
                 }
             }
         }
-        assertEquals(3, checked, "expected to check every injector");
+        assertEquals(4, checked, "expected to check every injector");
     }
 
     private static boolean matches(MethodNode method, String selector) {

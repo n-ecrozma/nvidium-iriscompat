@@ -35,6 +35,8 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
     private RenderSectionManager renderSectionManager;
     @Unique
     private Viewport viewport;
+    @Unique
+    private Viewport shadowViewport;
 
     @Override
     public NvidiumWorldRenderer getRenderer() {
@@ -47,8 +49,9 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
 
     @Inject(method = "setupTerrain", at = @At(value = "HEAD"))
     public void trackViewport(Camera camera, Viewport viewport, FogParameters fogParameters, boolean spectator, boolean updateChunksImmediately, Matrix4f cullMatrix, CallbackInfo ci) {
-        // Iris also calls setupTerrain for its shadow pass, with the shadow frustum. Keep the player's viewport.
+        // Iris also calls setupTerrain for its shadow pass, with the shadow frustum; keep the two apart
         if (IrisCompat.isRenderingShadowPass()) {
+            this.shadowViewport = viewport;
             return;
         }
         this.viewport = viewport;
@@ -61,19 +64,29 @@ public abstract class MixinSodiumWorldRenderer implements INvidiumWorldRendererG
             if (pass == DefaultTerrainRenderPasses.CUTOUT) // Early exit, cutout will be rendered with SOLID
                 return;
 
-            // TODO(iris): draw terrain into the shadow map (milestone M4). Until then terrain casts no shadows.
-            // Rendering a normal Nvidium frame from the shadow camera would corrupt the occlusion culling state,
-            // which is built from the player's view and reused across frames. Sodium has no geometry to fall back
-            // on either, since Nvidium takes over the uploads.
-            if (IrisCompat.isRenderingShadowPass()) {
-                return;
-            }
-
             // Invalidate lastProgram to prevent B3D caching bad program
             ((GlCommandEncoderAccessor)
                     ((FrontendCommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder())
                             .nvidium$getBackend())
                     .nvidium$setLastProgram(null);
+
+            // Iris's shadow pass: draw terrain into the shadow map with the pack's shadow programs. This doesn't run a
+            // normal Nvidium frame, whose occlusion culling is built from the player's view and reused across frames.
+            if (IrisCompat.isRenderingShadowPass()) {
+                GlStateManager._disableScissorTest();
+                GlStateManager._disableCull(); // as Iris does for terrain in its shadow pass
+                GlStateManager._enableDepthTest();
+                GlStateManager._depthFunc(IrisCompat.isReverseZDuringShaders() ? GL33C.GL_GEQUAL : GL33C.GL_LEQUAL);
+                GlStateManager._colorMask(0, 15);
+                GlStateManager._depthMask(true);
+                GlStateManager._disableBlend(0);
+                if (pass == DefaultTerrainRenderPasses.SOLID) {
+                    this.getRenderer().renderShadow(pass, shadowViewport, fogParameters, matrices, x, y, z, false);
+                } else if (pass == DefaultTerrainRenderPasses.TRANSLUCENT) {
+                    this.getRenderer().renderShadow(pass, shadowViewport, fogParameters, matrices, x, y, z, true);
+                }
+                return;
+            }
 
             GlStateManager._disableScissorTest();
             GlStateManager._enableCull();

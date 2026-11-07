@@ -47,8 +47,14 @@ void populateTasks(ivec3 relative, uint baseOffset, uvec4 ranges) {
     uvec3 cA = uvec3(cA_.x,cB_.x,cA_.y);
     uvec3 cB = uvec3(cB_.y,cA_.z,cB_.z);
 
+#ifdef NO_FACE_CULLING
+    // Iris's shadow pass: faces pointing away from the player still cast shadows
+    bvec3 a = notEqual(cA, uvec3(0));
+    bvec3 b = notEqual(cB, uvec3(0));
+#else
     bvec3 a = and(notEqual(cA, uvec3(0)), lessThanEqual(relative, ivec3(0)));
     bvec3 b = and(notEqual(cB, uvec3(0)), lessThanEqual(ivec3(0), relative));
+#endif
 
 
     uvec4 starts;

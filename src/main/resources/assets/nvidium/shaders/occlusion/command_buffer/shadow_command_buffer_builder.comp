@@ -1,0 +1,55 @@
+#version 460
+#pragma unroll
+#pragma optionNV(unroll all)
+#extension GL_ARB_shading_language_include : enable
+#extension GL_NV_gpu_shader5 : enable
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+// Builds the draw lists for Iris's shadow pass (see command_buffer_builder.comp for the normal pass).
+// Visibility from the player's view (occlusion culling) doesn't apply to the sun's view, so every non-empty,
+// non-hidden section of each region in the shadow frustum is drawn. Bound with shadow-specific SceneData, so
+// regionIndicies, sectionIndices and the command buffers are the shadow pass's own.
+
+#import <nvidium:occlusion/scene.glsl>
+
+layout(local_size_x = 32) in;
+
+bool hasOpaqueData(ivec4 header) {
+    return !sectionEmpty(header) && (header.y & (1 << 17)) == 0;
+}
+
+// Translucent data can live in a different slot of the region than its section (see
+// getReflectedTranslucentSectionId in command_buffer_builder.comp), so check each slot's own quad count:
+// every translucent data set is then drawn exactly once, whichever slot holds it.
+bool hasTranslucentData(uint sectionId) {
+    return sectionData[sectionId].tranlucentQuadCount > 0;
+}
+
+void main() {
+    uint baseSectionId = uint(regionIndicies[gl_WorkGroupID.x]) << 8;
+
+    uvec2 renderCounts = uvec2(0);
+    for (uint i = 0; i < 8; i++) {
+        uint sectionId = baseSectionId + gl_LocalInvocationID.x * 8 + i;
+        renderCounts += uvec2(uint(hasOpaqueData(sectionData[sectionId].header)), uint(hasTranslucentData(sectionId)));
+    }
+
+    uvec2 workId = subgroupExclusiveAdd(renderCounts);
+    uvec2 totalSectionCount = subgroupAdd(renderCounts);
+
+    for (uint i = 0; i < 8; i++) {
+        uint sectionId = baseSectionId + gl_LocalInvocationID.x * 8 + i;
+        if (hasOpaqueData(sectionData[sectionId].header)) {
+            sectionIndices[baseSectionId + workId.x++].x = uint8_t(sectionId & 0xFF);
+        }
+        if (hasTranslucentData(sectionId)) {
+            sectionIndices[baseSectionId + workId.y++].y = uint8_t(sectionId & 0xFF);
+        }
+    }
+
+    if (subgroupElect()) {
+        terrainCommandBuffer[gl_WorkGroupID.x] = uvec2(totalSectionCount.x, baseSectionId);
+        translucencyCommandBuffer[gl_WorkGroupID.x] = uvec2(totalSectionCount.y, baseSectionId);
+    }
+}

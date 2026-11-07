@@ -21,6 +21,11 @@ public final class IrisCompat {
         return IRIS_LOADED && IrisApi.getInstance().isRenderingShadowPass();
     }
 
+    /** Whether Iris renders with reverse-Z right now (it doesn't in its shadow pass). */
+    public static boolean isReverseZDuringShaders() {
+        return !IRIS_LOADED || IrisApi.getInstance().isReverseZDuringShaders();
+    }
+
     /**
      * Whether Nvidium should keep rendering while a shader pack is active.
      * Without the experimental option Nvidium hands rendering back to Sodium, like upstream does.

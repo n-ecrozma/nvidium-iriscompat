@@ -18,7 +18,7 @@ public class MixinShaderCreator {
      * Iris's patched sources arrive here, after all of Iris's transformations.
      */
     @WrapOperation(
-            method = "create",
+            method = {"create", "createShadow"},
             at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/programs/ShaderCreator;link(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/mojang/renderpearl/api/vertex/VertexFormat;Z)Lnet/irisshaders/iris/pipeline/programs/PartialShader;")
     )
     private static PartialShader nvidium$linkMeshProgram(String name, String vertex, String geometry, String tessControl,
