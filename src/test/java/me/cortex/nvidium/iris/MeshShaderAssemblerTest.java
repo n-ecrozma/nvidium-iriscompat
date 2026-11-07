@@ -81,6 +81,18 @@ class MeshShaderAssemblerTest {
     }
 
     @Test
+    void solidCutoutFilter() {
+        // Opaque programs can skip solid or cutout quads (marked with bit 17 of word 4 when repacking)
+        assertTrue(mesh.contains("uniform int _nv_quadFilter;"));
+        assertTrue(mesh.contains("(_nv_terrainData[(quadId << 2) * 7u + 4u] >> 17) & 1u"));
+        // The mark must not leak into the pack's view of a_LightAndData.z (Iris's tangent sign is bit 0)
+        assertTrue(mesh.contains("(_nv_word(4u) >> 16u) & 0xFDu"));
+        var layout = new MeshShaderAssembler.VertexLayout(7, Map.of());
+        String translucent = MeshShaderAssembler.assemble(MeshShaderAssembler.Kind.TRANSLUCENT, stage, layout, 32, java.util.List.of());
+        assertFalse(translucent.contains("_nv_quadFilter"), "translucent terrain is never split");
+    }
+
+    @Test
     void missingOptionalFieldGetsZero() {
         var layout = new MeshShaderAssembler.VertexLayout(5, Map.of());
         String noExtras = MeshShaderAssembler.assemble(stage, layout, 16);

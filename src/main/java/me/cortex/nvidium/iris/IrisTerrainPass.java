@@ -20,6 +20,8 @@ import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3fc;
 import org.lwjgl.opengl.GL15C;
+import org.lwjgl.opengl.GL20C;
+import org.lwjgl.opengl.GL41C;
 import org.lwjgl.opengl.GL31C;
 import org.lwjgl.opengl.GL32C;
 import org.lwjgl.opengl.GL33C;
@@ -125,6 +127,9 @@ public final class IrisTerrainPass {
                 status = "Nvidium shaders (settings changed, reload the shader pack)";
             } else if (programs.has(group)) {
                 status = "pack shaders (" + programs.vertexStride() + " B/vertex)";
+            } else if (programs.note(group) != null) {
+                info.add("Shader pack " + group.label + ": " + programs.note(group));
+                continue;
             } else {
                 String reason = programs.failure(group);
                 if (reason == null) {
@@ -186,14 +191,25 @@ public final class IrisTerrainPass {
         draw(programs, IrisTerrainPrograms.Pass.TRANSLUCENT, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize);
     }
 
-    /** Draws terrain for one of Nvidium's passes; see {@link #draw(ExtendedShader, TerrainRenderPass, int, long, long, long)}. */
+    /** Which quads an opaque terrain draw covers (the {@code _nv_quadFilter} uniform in terrain/iris/mesh.glsl). */
+    public static final int QUADS_ALL = 0;
+    public static final int QUADS_SOLID = 1;
+    public static final int QUADS_CUTOUT = 2;
+
+    /** Draws all quads for one of Nvidium's passes; see {@link #draw(ExtendedShader, TerrainRenderPass, int, long, long, long, int)}. */
     public void draw(IrisTerrainPrograms.Programs programs, IrisTerrainPrograms.Pass nvidiumPass, TerrainRenderPass pass,
                      int regionCount, long commandAddress, long sceneDataAddress, long sceneDataSize) {
+        draw(programs, nvidiumPass, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize, QUADS_ALL);
+    }
+
+    /** Draws terrain for one of Nvidium's passes; see {@link #draw(ExtendedShader, TerrainRenderPass, int, long, long, long, int)}. */
+    public void draw(IrisTerrainPrograms.Programs programs, IrisTerrainPrograms.Pass nvidiumPass, TerrainRenderPass pass,
+                     int regionCount, long commandAddress, long sceneDataAddress, long sceneDataSize, int quads) {
         ExtendedShader program = programs.get(nvidiumPass);
         if (program == null) {
             return; // a lazy program that failed to set up; the failure is logged and shown in F3
         }
-        draw(program, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize);
+        draw(program, pass, regionCount, commandAddress, sceneDataAddress, sceneDataSize, quads);
     }
 
     /**
@@ -201,9 +217,16 @@ public final class IrisTerrainPass {
      * must point it back at Nvidium's scene data before running its own shaders.
      *
      * @param sceneDataAddress GPU address of Nvidium's SceneData, read by the task shader
+     * @param quads            {@link #QUADS_ALL}, {@link #QUADS_SOLID} or {@link #QUADS_CUTOUT} (opaque programs only)
      */
     public void draw(ExtendedShader program, TerrainRenderPass pass, int regionCount, long commandAddress,
-                     long sceneDataAddress, long sceneDataSize) {
+                     long sceneDataAddress, long sceneDataSize, int quads) {
+        // Set on every draw: uniforms keep their value, and a program may be drawn with different filters
+        int quadFilter = GL20C.glGetUniformLocation(program.getProgramId(), "_nv_quadFilter");
+        if (quadFilter >= 0) {
+            GL41C.glProgramUniform1i(program.getProgramId(), quadFilter, quads);
+        }
+
         // Binds the program, the pack's uniforms and samplers, its G-buffer framebuffer and blend state
         program.iris$setupState(List.of());
 

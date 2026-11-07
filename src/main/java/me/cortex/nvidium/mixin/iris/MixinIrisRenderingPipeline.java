@@ -33,8 +33,8 @@ public class MixinIrisRenderingPipeline {
      * After Iris creates one of the shader pack's programs for Sodium's terrain, build Nvidium's mesh shader
      * versions of it with exactly the same inputs (framebuffers, uniforms, alpha test, ...).
      * <p>
-     * Nvidium draws solid and cutout terrain in one pass, so it uses the cutout program, whose alpha test is
-     * harmless for solid blocks. Translucent terrain uses the translucent (gbuffers_water) program.
+     * Nvidium stores solid and cutout terrain together and draws both with the cutout program, unless the pack's
+     * solid program differs; then each is drawn with its own. Translucent terrain uses the gbuffers_water program.
      */
     @WrapOperation(
             method = "createShader(Ljava/lang/String;Lnet/irisshaders/iris/pipeline/programs/ShaderKey;Lnet/irisshaders/iris/shaderpack/programs/ProgramSource;Lnet/irisshaders/iris/shaderpack/loading/ProgramId;Lnet/irisshaders/iris/gl/blending/AlphaTest;Lcom/mojang/renderpearl/api/vertex/VertexFormat;Lnet/irisshaders/iris/gl/state/FogMode;ZZZZZLnet/irisshaders/iris/pipeline/transform/Patch;)Lnet/irisshaders/iris/pipeline/programs/ShaderSupplier;",
@@ -54,16 +54,25 @@ public class MixinIrisRenderingPipeline {
                 fallbackAlpha, vertexFormat, inputs, updateNotifier, parent, flipped, fogMode, isIntensity, isFullbright,
                 isShadowPass, isLines, customUniforms, patch);
 
-        IrisTerrainPrograms.Group group = key == ShaderKey.SODIUM_TERRAIN_CUTOUT ? IrisTerrainPrograms.Group.OPAQUE
-                : key == ShaderKey.SODIUM_TERRAIN_TRANSLUCENT ? IrisTerrainPrograms.Group.TRANSLUCENT
-                : null;
-        if (group != null && patch == Patch.SODIUM && IrisTerrainPrograms.shouldBuild()) {
-            // Sodium keys have no fixed format: Iris uses the pack's terrain format, which it also returns from
-            // ChunkMeshFormats.getCurrent()
-            int stride = (vertexFormat != null ? vertexFormat : ChunkMeshFormats.getCurrent().getVertexFormat()).getVertexSize();
-            IrisTerrainPrograms.build(parent, group, stride, pass -> original.call(pipeline, name, key, source, programId,
-                    beforeTranslucent, afterTranslucent, fallbackAlpha, vertexFormat, inputs, updateNotifier, parent,
-                    flipped, fogMode, isIntensity, isFullbright, isShadowPass, isLines, customUniforms, patch));
+        if (patch != Patch.SODIUM || !IrisTerrainPrograms.shouldBuild()
+                || (key != ShaderKey.SODIUM_TERRAIN_CUTOUT && key != ShaderKey.SODIUM_TERRAIN_TRANSLUCENT && key != ShaderKey.SODIUM_TERRAIN_SOLID)) {
+            return result;
+        }
+        // Sodium keys have no fixed format: Iris uses the pack's terrain format, which it also returns from
+        // ChunkMeshFormats.getCurrent()
+        int stride = (vertexFormat != null ? vertexFormat : ChunkMeshFormats.getCurrent().getVertexFormat()).getVertexSize();
+        java.util.function.Function<IrisTerrainPrograms.Pass, ShaderSupplier> createAgain = pass -> original.call(pipeline,
+                name, key, source, programId, beforeTranslucent, afterTranslucent, fallbackAlpha, vertexFormat, inputs,
+                updateNotifier, parent, flipped, fogMode, isIntensity, isFullbright, isShadowPass, isLines, customUniforms, patch);
+
+        if (key == ShaderKey.SODIUM_TERRAIN_SOLID) {
+            // Only built if it differs from the cutout program, which may not have been created yet
+            IrisTerrainPrograms.offerSolid(parent, source, stride, createAgain);
+        } else if (key == ShaderKey.SODIUM_TERRAIN_CUTOUT) {
+            IrisTerrainPrograms.build(parent, IrisTerrainPrograms.Group.OPAQUE, stride, createAgain);
+            IrisTerrainPrograms.offerCutout(parent, source);
+        } else {
+            IrisTerrainPrograms.build(parent, IrisTerrainPrograms.Group.TRANSLUCENT, stride, createAgain);
         }
         return result;
     }

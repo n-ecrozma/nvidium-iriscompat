@@ -366,6 +366,8 @@ public class RenderPipeline {
         //Shader pack terrain programs to draw with this frame, if any (otherwise Nvidium's own terrain shaders)
         final IrisTerrainPrograms.Programs irisPrograms = irisTerrainPass != null ? irisTerrainPass.programsForFrame() : null;
         final boolean irisOpaque = irisPrograms != null && irisPrograms.has(IrisTerrainPrograms.Group.OPAQUE);
+        //The pack's solid program differs from its cutout one: draw each kind of quad with its own program
+        final boolean irisSplitSolid = irisOpaque && irisPrograms.has(IrisTerrainPrograms.Group.SOLID);
         if (irisPrograms != null) {
             //Also used by the translucent pass later this frame
             Vector3f cameraOffset = new Vector3f((float) (px-(chunkPos.x<<4)), (float) (py-(chunkPos.y<<4)), (float) (pz-(chunkPos.z<<4))).negate();
@@ -397,8 +399,8 @@ public class RenderPipeline {
             glEnable(GL_DEPTH_TEST);
             if (irisOpaque) {
                 final int regionCount = prevRegionCount;
-                terrainRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.PRIMARY, pass,
-                        regionCount, terrainCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
+                terrainRasterizer.timed(() -> drawIrisOpaque(irisPrograms, irisSplitSolid, IrisTerrainPrograms.Pass.PRIMARY_SOLID,
+                        IrisTerrainPrograms.Pass.PRIMARY, pass, regionCount, terrainCommandBuffer.getDeviceAddress()));
                 //The pack program used slot 0 for its own uniforms; Nvidium's shaders expect SceneData there
                 glBufferAddressRangeNV(GL_UNIFORM_BUFFER_ADDRESS_NV, 0, sceneUniform.getDeviceAddress(), SCENE_SIZE);
             } else {
@@ -464,8 +466,8 @@ public class RenderPipeline {
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
             if (irisOpaque) {
                 final int regionCount = visibleRegions;
-                temporalRasterizer.timed(() -> irisTerrainPass.draw(irisPrograms, IrisTerrainPrograms.Pass.TEMPORAL, pass,
-                        regionCount, temporalCommandBuffer.getDeviceAddress(), sceneUniform.getDeviceAddress(), SCENE_SIZE));
+                temporalRasterizer.timed(() -> drawIrisOpaque(irisPrograms, irisSplitSolid, IrisTerrainPrograms.Pass.TEMPORAL_SOLID,
+                        IrisTerrainPrograms.Pass.TEMPORAL, pass, regionCount, temporalCommandBuffer.getDeviceAddress()));
                 glBufferAddressRangeNV(GL_UNIFORM_BUFFER_ADDRESS_NV, 0, sceneUniform.getDeviceAddress(), SCENE_SIZE);
             } else {
                 temporalRasterizer.raster(pass, visibleRegions, temporalCommandBuffer.getDeviceAddress(), terrainSampler);
@@ -494,6 +496,20 @@ public class RenderPipeline {
         //if ((err = glGetError()) != 0) {
         //    throw new IllegalStateException("GLERROR: "+err);
         //}
+    }
+
+    /**
+     * Draws opaque terrain with the pack's programs: everything with the cutout program, or, when the pack's solid
+     * program differs, solid quads with it and cutout quads with the cutout program (the mesh shader skips the rest).
+     */
+    private void drawIrisOpaque(IrisTerrainPrograms.Programs programs, boolean splitSolid, IrisTerrainPrograms.Pass solidPass,
+                                IrisTerrainPrograms.Pass cutoutPass, TerrainRenderPass pass, int regionCount, long commands) {
+        if (splitSolid) {
+            irisTerrainPass.draw(programs, solidPass, pass, regionCount, commands, sceneUniform.getDeviceAddress(), SCENE_SIZE, IrisTerrainPass.QUADS_SOLID);
+            irisTerrainPass.draw(programs, cutoutPass, pass, regionCount, commands, sceneUniform.getDeviceAddress(), SCENE_SIZE, IrisTerrainPass.QUADS_CUTOUT);
+        } else {
+            irisTerrainPass.draw(programs, cutoutPass, pass, regionCount, commands, sceneUniform.getDeviceAddress(), SCENE_SIZE, IrisTerrainPass.QUADS_ALL);
+        }
     }
 
     /**

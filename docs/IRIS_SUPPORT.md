@@ -92,11 +92,18 @@ pack renders translucent shadows, `SHADOW_SODIUM_TERRAIN_TRANSLUCENT`).
 - Drawn with face culling off and a forward-Z depth test, matching Iris's shadow pass.
 - F3 shows `Shader pack shadow terrain: ...` and `Shader pack shadow water: ...`.
 
+**Separate solid and cutout programs.** Nvidium stores solid and cutout quads together. When a
+pack's solid and cutout programs differ (compared by source, so packs with only
+`gbuffers_terrain` are unaffected), cutout quads are marked during chunk repacking (bit 1 of the
+byte Iris uses for the tangent sign, hidden from the pack's code) and opaque terrain is drawn
+twice: solid quads with the solid program, cutout quads with the cutout program. The mesh
+shader skips the other kind after a single read, before running pack code. Otherwise the one
+cutout program draws both, as before. F3 shows `Shader pack solid terrain: ...`. BSL and
+Complementary Reimagined both use one program, so this path is not yet tested in game. The
+shadow pass still uses the cutout shadow program for both.
+
 ### Known limitations after M4
 
-- Solid and cutout terrain share the pack's **cutout** program (Nvidium draws them in one
-  pass). Packs whose `gbuffers_terrain_solid` and `gbuffers_terrain_cutout` differ will show
-  the cutout version for solid blocks.
 - The **"Quads" translucency sorting** setting isn't supported with shader packs (it reorders
   vertices inside Nvidium's own translucent shader). With it selected, water falls back to
   Nvidium's shader and F3 says why; use "Sodium" (the default) or "Sections".

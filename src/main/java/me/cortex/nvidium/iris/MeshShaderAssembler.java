@@ -112,7 +112,8 @@ public final class MeshShaderAssembler {
                 // The section index (w) is forced to 0: Nvidium positions each section through iris_RegionOffset,
                 // so Sodium's per-section translation must be zero. It also makes the chunk fade lookup read
                 // entry 0 of u_SectionTimeInfo, which Nvidium fills with "no fade".
-                case "a_LightAndData" -> "uvec4(_nv_word(4u) & 0xFFu, (_nv_word(4u) >> 8u) & 0xFFu, (_nv_word(4u) >> 16u) & 0xFFu, 0u)";
+                // z: Iris's tangent sign (bit 0); bit 1 is Nvidium's cutout quad mark, hidden from the pack
+                case "a_LightAndData" -> "uvec4(_nv_word(4u) & 0xFFu, (_nv_word(4u) >> 8u) & 0xFFu, (_nv_word(4u) >> 16u) & 0xFDu, 0u)";
                 default -> extraField(name, layout);
             };
 

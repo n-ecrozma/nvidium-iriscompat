@@ -40,6 +40,10 @@ layout(std140, binding = ${SCENE_BINDING}) uniform _NvIrisScene {
 uint _nv_vid;
 uint _nv_vertexBase;
 
+// Which quads to draw, set by Nvidium per draw: 0 = all, 1 = solid only, 2 = cutout only. Used when the pack's
+// solid and cutout programs differ; cutout quads are marked with bit 17 of word 4 (see SodiumResultCompatibility).
+uniform int _nv_quadFilter;
+
 uint _nv_word(uint index) {
     return _nv_terrainData[_nv_vertexBase + index];
 }
@@ -97,6 +101,14 @@ void main() {
     uint quadId = _nv_quad_offset();
     if (quadId == uint(-1)) {
         return;
+    }
+
+    if (_nv_quadFilter != 0) {
+        // Both threads of a quad read the same flag, so they skip it together
+        bool cutout = ((_nv_terrainData[(quadId << 2) * ${VERTEX_WORDS}u + 4u] >> 17) & 1u) != 0u;
+        if (cutout != (_nv_quadFilter == 2)) {
+            return;
+        }
     }
 
     // Each pair of threads emits one quad as two triangles: (v0, v1, v2) and (v2, v3, v0)

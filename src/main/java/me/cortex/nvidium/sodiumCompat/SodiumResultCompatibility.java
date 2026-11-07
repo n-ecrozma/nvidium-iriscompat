@@ -14,13 +14,29 @@ import org.lwjgl.system.MemoryUtil;
 
 public class SodiumResultCompatibility {
 
+    /**
+     * Bit 17 of a vertex's fifth word (bit 1 of the byte Iris uses for the tangent sign) marks quads from Sodium's
+     * cutout pass, so shader pack programs can draw solid and cutout quads separately. Only used with Iris's vertex
+     * layout, where that bit is free; in Sodium's own layout the byte holds material flags.
+     */
+    public static final int CUTOUT_QUAD_BIT = 1 << 17;
+    private static final int CUTOUT_QUAD_BYTE_OFFSET = 18;
+    private static final byte CUTOUT_QUAD_BYTE_BIT = 1 << 1;
+
     public static RepackagedSectionOutput repackage(ChunkBuildOutput result, int formatSize) {
+        return repackage(result, formatSize, false);
+    }
+
+    /**
+     * @param markCutoutQuads set {@link #CUTOUT_QUAD_BIT} on quads from the cutout pass (Iris's vertex layout only)
+     */
+    public static RepackagedSectionOutput repackage(ChunkBuildOutput result, int formatSize, boolean markCutoutQuads) {
         int geometryBytes = result.meshes.values().stream().mapToInt(a->a.getVertexData().getLength()).sum();
         var output = new NativeBuffer(geometryBytes);
         var offsets = new int[8];
         var min = new Vector3i(2000);
         var max = new Vector3i(-2000);
-        packageSectionGeometry(formatSize, output, offsets, result, min, max);
+        packageSectionGeometry(formatSize, output, offsets, result, min, max, markCutoutQuads && isSodiumLayout(formatSize));
 
         Vector3i size;
         {
@@ -96,7 +112,7 @@ public class SodiumResultCompatibility {
     }
 
     //Everything is /6*4 cause its in indices and we want verticies
-    private static void packageSectionGeometry(int formatSize, NativeBuffer output, int[] outOffsets, ChunkBuildOutput result, Vector3i min, Vector3i max) {
+    private static void packageSectionGeometry(int formatSize, NativeBuffer output, int[] outOffsets, ChunkBuildOutput result, Vector3i min, Vector3i max, boolean markCutoutQuads) {
         int offset = 0;
         long outPtr = MemoryUtil.memAddress(output.getDirectBuffer());
 
@@ -242,15 +258,23 @@ public class SodiumResultCompatibility {
                 );
             }
             if (cutout != null) {
-                offset += copyRange(
+                long cutoutStart = outPtr + offset * 4L * formatSize;
+                int cutoutQuads = copyRange(
                         cutout,
                         cutoutRanges[i * 2],
                         cutoutRanges[i * 2 + 1],
-                        outPtr + offset * 4L * formatSize,
+                        cutoutStart,
                         formatSize,
                         min,
                         max
                 );
+                if (markCutoutQuads) {
+                    for (long v = 0; v < cutoutQuads * 4L; v++) {
+                        long flags = cutoutStart + v * formatSize + CUTOUT_QUAD_BYTE_OFFSET;
+                        MemoryUtil.memPutByte(flags, (byte) (MemoryUtil.memGetByte(flags) | CUTOUT_QUAD_BYTE_BIT));
+                    }
+                }
+                offset += cutoutQuads;
             }
             outOffsets[i] = (short) (offset - poff);
         }

@@ -7,6 +7,7 @@ import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.pipeline.programs.ExtendedShader;
 import net.irisshaders.iris.pipeline.programs.ShaderSupplier;
+import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import org.lwjgl.opengl.GL31C;
 
 import org.lwjgl.opengl.GL20C;
@@ -14,6 +15,7 @@ import org.lwjgl.opengl.GL20C;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.WeakHashMap;
 import java.util.function.Function;
 
@@ -31,8 +33,13 @@ import java.util.function.Function;
 public final class IrisTerrainPrograms {
     /** Passes that are built from the same Iris program and are used together (or not at all). */
     public enum Group {
-        /** Solid and cutout terrain, from {@code SODIUM_TERRAIN_CUTOUT} (Nvidium draws both in one pass). */
+        /**
+         * Cutout terrain, from {@code SODIUM_TERRAIN_CUTOUT}. Also draws solid terrain unless the pack's solid
+         * program differs (Nvidium stores both in one pass).
+         */
         OPAQUE("terrain", false),
+        /** Solid terrain, from {@code SODIUM_TERRAIN_SOLID}; only built when the pack's solid program differs. */
+        SOLID("solid terrain", false),
         /** Translucent terrain such as water, from {@code SODIUM_TERRAIN_TRANSLUCENT} (gbuffers_water). */
         TRANSLUCENT("water", false),
         /** Solid and cutout terrain in the shadow map, from {@code SHADOW_SODIUM_TERRAIN_CUTOUT}. */
@@ -57,6 +64,8 @@ public final class IrisTerrainPrograms {
     public enum Pass {
         PRIMARY(Group.OPAQUE, "terrain/task.glsl", MeshShaderAssembler.Kind.OPAQUE, List.of()),
         TEMPORAL(Group.OPAQUE, "terrain/temporal_task.glsl", MeshShaderAssembler.Kind.OPAQUE, List.of()),
+        PRIMARY_SOLID(Group.SOLID, "terrain/task.glsl", MeshShaderAssembler.Kind.OPAQUE, List.of()),
+        TEMPORAL_SOLID(Group.SOLID, "terrain/temporal_task.glsl", MeshShaderAssembler.Kind.OPAQUE, List.of()),
         TRANSLUCENT(Group.TRANSLUCENT, "terrain/translucent/task.glsl", MeshShaderAssembler.Kind.TRANSLUCENT, List.of()),
         // Faces pointing away from the player still cast shadows
         SHADOW(Group.SHADOW_OPAQUE, "terrain/task.glsl", MeshShaderAssembler.Kind.OPAQUE, List.of("NO_FACE_CULLING")),
@@ -99,6 +108,8 @@ public final class IrisTerrainPrograms {
         /** Linked programs of lazy groups that haven't been wrapped in an ExtendedShader yet. */
         private final Map<Pass, ShaderSupplier> pending = new EnumMap<>(Pass.class);
         private final Map<Group, String> failures = new EnumMap<>(Group.class);
+        /** Why a group was deliberately not built (not an error). */
+        private final Map<Group, String> notes = new EnumMap<>(Group.class);
         private final int vertexStride;
         private final TaskShaderSettings settings;
 
@@ -164,6 +175,11 @@ public final class IrisTerrainPrograms {
             return failures.get(group);
         }
 
+        /** Why the group was deliberately not built, or null. */
+        public String note(Group group) {
+            return notes.get(group);
+        }
+
         private void close() {
             programs.values().forEach(GlProgram::close);
             programs.clear();
@@ -174,6 +190,11 @@ public final class IrisTerrainPrograms {
 
     private static final ThreadLocal<Pass> BUILDING = new ThreadLocal<>();
     private static final Map<IrisRenderingPipeline, Programs> BY_PIPELINE = new WeakHashMap<>();
+
+    /** The pack's solid terrain program, until the cutout one is known and they can be compared. */
+    private record SolidCandidate(ProgramSource source, int vertexStride, Function<Pass, ShaderSupplier> createAgain) {}
+    private static final Map<IrisRenderingPipeline, SolidCandidate> SOLID_CANDIDATES = new WeakHashMap<>();
+    private static final Map<IrisRenderingPipeline, ProgramSource> CUTOUT_SOURCES = new WeakHashMap<>();
 
     private IrisTerrainPrograms() {}
 
@@ -198,7 +219,8 @@ public final class IrisTerrainPrograms {
         var settings = TaskShaderSettings.current();
         Programs programs = BY_PIPELINE.get(pipeline);
         if (programs == null || programs.vertexStride != vertexStride || !programs.settings.equals(settings)) {
-            release(pipeline);
+            // Only drop old programs: a pending solid program offered for this pipeline must survive
+            dropPrograms(pipeline);
             programs = new Programs(vertexStride, settings);
             BY_PIPELINE.put(pipeline, programs);
         }
@@ -259,7 +281,58 @@ public final class IrisTerrainPrograms {
         GL20C.glDeleteProgram(supplier.id().getFinally());
     }
 
+    /** Called with Iris's solid terrain program; see {@link #decideSolid}. */
+    public static void offerSolid(IrisRenderingPipeline pipeline, ProgramSource source, int vertexStride,
+                                  Function<Pass, ShaderSupplier> createAgain) {
+        SOLID_CANDIDATES.put(pipeline, new SolidCandidate(source, vertexStride, createAgain));
+        decideSolid(pipeline);
+    }
+
+    /** Called with Iris's cutout terrain program, after the opaque group was built from it. */
+    public static void offerCutout(IrisRenderingPipeline pipeline, ProgramSource source) {
+        CUTOUT_SOURCES.put(pipeline, source);
+        decideSolid(pipeline);
+    }
+
+    /**
+     * Once both terrain programs are known: build a separate solid program only if the pack's solid program differs
+     * from its cutout one. Most packs use gbuffers_terrain for both, and drawing every quad twice would waste work.
+     */
+    private static void decideSolid(IrisRenderingPipeline pipeline) {
+        SolidCandidate solid = SOLID_CANDIDATES.get(pipeline);
+        ProgramSource cutout = CUTOUT_SOURCES.get(pipeline);
+        if (solid == null || cutout == null) {
+            return;
+        }
+        SOLID_CANDIDATES.remove(pipeline);
+        CUTOUT_SOURCES.remove(pipeline);
+        Programs programs = BY_PIPELINE.get(pipeline);
+        if (programs == null || !programs.has(Group.OPAQUE)) {
+            return; // no pack terrain programs at all; solid alone is useless
+        }
+        if (sameProgram(solid.source(), cutout)) {
+            programs.notes.put(Group.SOLID, "same program as cutout, drawn together");
+            return;
+        }
+        build(pipeline, Group.SOLID, solid.vertexStride(), solid.createAgain());
+    }
+
+    private static boolean sameProgram(ProgramSource a, ProgramSource b) {
+        return Objects.equals(a.getVertexSource(), b.getVertexSource())
+                && Objects.equals(a.getGeometrySource(), b.getGeometrySource())
+                && Objects.equals(a.getTessControlSource(), b.getTessControlSource())
+                && Objects.equals(a.getTessEvalSource(), b.getTessEvalSource())
+                && Objects.equals(a.getFragmentSource(), b.getFragmentSource())
+                && Objects.equals(a.getDirectives().getAlphaTestOverride(), b.getDirectives().getAlphaTestOverride());
+    }
+
     public static void release(IrisRenderingPipeline pipeline) {
+        SOLID_CANDIDATES.remove(pipeline);
+        CUTOUT_SOURCES.remove(pipeline);
+        dropPrograms(pipeline);
+    }
+
+    private static void dropPrograms(IrisRenderingPipeline pipeline) {
         Programs programs = BY_PIPELINE.remove(pipeline);
         if (programs != null) {
             programs.close();
